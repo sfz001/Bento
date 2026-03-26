@@ -239,7 +239,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusMenu.addItem(.separator())
 
-        let aboutItem = NSMenuItem(title: "RustDesk remote auto screen-off", action: nil, keyEquivalent: "")
+        let authRestartItem = NSMenuItem(title: "FileVault AuthRestart", action: #selector(authRestart), keyEquivalent: "")
+        authRestartItem.target = self
+        statusMenu.addItem(authRestartItem)
+
+        statusMenu.addItem(.separator())
+
+        let aboutItem = NSMenuItem(title: "Remote/Screen Sharing auto screen-off", action: nil, keyEquivalent: "")
         aboutItem.isEnabled = false
         statusMenu.addItem(aboutItem)
 
@@ -279,18 +285,32 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return task.terminationStatus == 0
     }
 
+    private func isScreenSharingConnected() -> Bool {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/sh")
+        task.arguments = ["-c", "netstat -an | grep '\\.5900 ' | grep -q ESTABLISHED"]
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        try? task.run()
+        task.waitUntilExit()
+        return task.terminationStatus == 0
+    }
+
     private func pollConnectionState() {
-        let connected = isRustDeskConnected()
+        let rustdesk = isRustDeskConnected()
+        let screenSharing = isScreenSharingConnected()
+        let connected = rustdesk || screenSharing
 
         if connected && !screenCtl.isScreenBlack {
-            NSLog("[POLL] RustDesk connection active — activating screen off")
+            let source = rustdesk ? "RustDesk" : "Screen Sharing"
+            NSLog("[POLL] \(source) connection active — activating screen off")
             screenCtl.enableMirroring()
             screenCtl.switchResolution()
             screenCtl.saveDockAndSetLeft()
             screenCtl.setBlack()
             updateStatus()
         } else if !connected && screenCtl.isScreenBlack {
-            NSLog("[POLL] No active RustDesk connection — restoring screen")
+            NSLog("[POLL] No active connection — restoring screen")
             screenCtl.restore()
             screenCtl.restoreResolution()
             screenCtl.restoreDock()
@@ -315,6 +335,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Actions
+
+    @objc private func authRestart() {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        task.arguments = ["-e", "tell application \"Terminal\" to do script \"sudo fdesetup authrestart\"", "-e", "tell application \"Terminal\" to activate"]
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        try? task.run()
+    }
 
     @objc private func quitApp() {
         NSApplication.shared.terminate(nil)

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-macOS menu bar app (Swift + AppKit, single-file). When a RustDesk remote connection is detected, the local screen goes black for privacy; on disconnect, the screen restores and locks.
+macOS menu bar app (Swift + AppKit, single-file). When a RustDesk or macOS Screen Sharing (VNC) remote connection is detected, the local screen goes black for privacy; on disconnect, the screen restores and locks.
 
 ## Build & Run
 
@@ -17,11 +17,11 @@ Build requires macOS 14.0+ SDK. Uses `swiftc` directly (no Xcode project/SPM). F
 
 ## Architecture
 
-Everything lives in `RustDeskScreenOff.swift` (~270 lines), structured as two classes + main entry:
+Everything lives in `RustDeskScreenOff.swift` (~370 lines), structured as two classes + main entry:
 
-- **`ScreenController`** — Screen blackout via `CGSetDisplayTransferByFormula` (gamma to zero), restore via `CGDisplayRestoreColorSyncSettings`, lock via `open -a ScreenSaverEngine`. Multi-monitor mirroring via `CGConfigureDisplayMirrorOfDisplay` (merge on connect, restore on disconnect). Resolution switching to 1512x982 HiDPI on connect (saves/restores original mode). Gamma is invisible to ScreenCaptureKit so remote viewers see normal desktop.
+- **`ScreenController`** — Screen blackout via `CGSetDisplayTransferByFormula` (gamma to zero), restore via `CGDisplayRestoreColorSyncSettings`, lock via `open -a ScreenSaverEngine`. Multi-monitor mirroring via `CGConfigureDisplayMirrorOfDisplay` (merge on connect, restore on disconnect). Resolution switching to 1512x982 HiDPI on connect (saves/restores original mode). Dock repositioning (moves to left on connect, restores original position/autohide on disconnect). Gamma is invisible to ScreenCaptureKit so remote viewers see normal desktop.
 
-- **`AppDelegate`** — Orchestrates everything. Every 1 second polls `pgrep -fi "rustdesk.*--cm"` to detect active connections. On connect: enable mirroring → switch resolution → black screen. On disconnect: restore screen → restore resolution → disable mirroring → lock. Manages NSStatusItem menu bar UI. Installs LaunchAgent plist for login auto-start.
+- **`AppDelegate`** — Orchestrates everything. Every 1 second polls for active connections: `pgrep -fi "rustdesk.*--cm"` for RustDesk, `netstat` checking port 5900 ESTABLISHED for macOS Screen Sharing (VNC). On connect: enable mirroring → switch resolution → dock to left → black screen. On disconnect: restore screen → restore resolution → restore dock → disable mirroring → lock. Manages NSStatusItem menu bar UI with FileVault AuthRestart option. Installs LaunchAgent plist for login auto-start.
 
 - **Main entry** — Creates `NSApplication`, sets delegate, calls `app.run()` (no storyboard/NIB).
 
