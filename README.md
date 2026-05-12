@@ -16,6 +16,7 @@ A single app for a grab-bag of small personal utilities. Currently: remote-conne
 
 - 当有人通过 RustDesk 或 macOS 屏幕共享（VNC）远程连接到你的 Mac 时，本地屏幕自动变黑，防止旁人看到远程操作内容
 - 多显示器自动镜像：连接时自动将多个屏幕合并为一个，远程端只看到一个屏幕
+- 连接前保存多显示器镜像状态，断开后按快照恢复；菜单提供手动恢复扩展显示器
 - 自动切换分辨率：连接时切换到 1512×982 HiDPI，断开后恢复
 - Dock 自动移到左侧并关闭自动隐藏，断开后恢复原始位置
 - 远程连接断开后，屏幕自动恢复并锁屏
@@ -57,6 +58,7 @@ open Bento.app
 
 - Automatically blacks out the local screen when someone connects to your Mac via RustDesk or macOS Screen Sharing (VNC)
 - Auto display mirroring: merges multiple monitors into one when connected
+- Saves the pre-connection display mirroring state and restores it on disconnect; includes a manual restore action for extended displays
 - Auto resolution switching: switches to 1512×982 HiDPI on connect, restores on disconnect
 - Dock repositioning: moves Dock to the left and disables auto-hide on connect, restores on disconnect
 - Restores the screen, multi-monitor layout, resolution, and Dock when the remote connection ends, then locks the screen

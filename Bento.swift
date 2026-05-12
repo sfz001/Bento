@@ -7,23 +7,36 @@ import IOKit
 
 class ScreenController {
     private var isBlack = false
-    private var mirroredDisplays: [CGDirectDisplayID] = []
+    private let mirrorSnapshotDefaultsKey = "BentoMirrorSnapshot"
+    private var savedMirrorTargets: [CGDirectDisplayID: CGDirectDisplayID]?
+
+    private struct MirrorSnapshot: Codable {
+        let entries: [MirrorSnapshotEntry]
+    }
+
+    private struct MirrorSnapshotEntry: Codable {
+        let displayID: UInt32
+        let mirrorsDisplayID: UInt32
+    }
 
     func enableMirroring() {
-        var displays = [CGDirectDisplayID](repeating: 0, count: 16)
-        var count: UInt32 = 0
-        CGGetOnlineDisplayList(16, &displays, &count)
-
+        let displays = onlineDisplays()
         let main = CGMainDisplayID()
-        guard count > 1 else { return }
+        guard displays.count > 1 else { return }
+
+        let hadSnapshot = hasMirrorSnapshot()
+        if !hadSnapshot {
+            let snapshot = currentMirrorTargets(for: displays, main: main)
+            saveMirrorSnapshot(snapshot)
+            NSLog("Mirroring: saved pre-remote snapshot for \(snapshot.count) display(s)")
+        }
 
         var config: CGDisplayConfigRef?
         CGBeginDisplayConfiguration(&config)
 
         var mirrored: [CGDirectDisplayID] = []
-        for i in 0..<Int(count) {
-            let d = displays[i]
-            if d != main && CGDisplayMirrorsDisplay(d) == kCGNullDirectDisplay {
+        for d in displays where d != main {
+            if CGDisplayMirrorsDisplay(d) != main {
                 CGConfigureDisplayMirrorOfDisplay(config, d, main)
                 mirrored.append(d)
             }
@@ -36,24 +49,154 @@ class ScreenController {
 
         let err = CGCompleteDisplayConfiguration(config, .forSession)
         if err == .success {
-            mirroredDisplays = mirrored
             NSLog("Mirroring enabled for \(mirrored.count) display(s)")
+        } else {
+            if !hadSnapshot {
+                clearMirrorSnapshot()
+            }
+            NSLog("Mirroring enable failed with error \(err.rawValue)")
         }
     }
 
-    func disableMirroring() {
-        guard !mirroredDisplays.isEmpty else { return }
+    func disableMirroring(forceFallback: Bool = false) {
+        guard let snapshot = loadMirrorSnapshot() else {
+            if forceFallback {
+                restoreExtendedDisplays()
+            }
+            return
+        }
+
+        restoreMirrorTargets(snapshot)
+    }
+
+    func restoreExtendedDisplays() {
+        let displays = onlineDisplays()
+        guard displays.count > 1 else {
+            clearMirrorSnapshot()
+            return
+        }
 
         var config: CGDisplayConfigRef?
         CGBeginDisplayConfiguration(&config)
-        for d in mirroredDisplays {
+
+        var restored: [CGDirectDisplayID] = []
+        for d in displays where CGDisplayMirrorsDisplay(d) != kCGNullDirectDisplay {
             CGConfigureDisplayMirrorOfDisplay(config, d, kCGNullDirectDisplay)
+            restored.append(d)
         }
+
+        guard !restored.isEmpty else {
+            CGCancelDisplayConfiguration(config)
+            clearMirrorSnapshot()
+            NSLog("Mirroring already disabled")
+            return
+        }
+
         let err = CGCompleteDisplayConfiguration(config, .forSession)
         if err == .success {
-            NSLog("Mirroring disabled, restored \(mirroredDisplays.count) display(s)")
-            mirroredDisplays = []
+            clearMirrorSnapshot()
+            NSLog("Mirroring force-disabled for \(restored.count) display(s)")
+        } else {
+            NSLog("Mirroring force-disable failed with error \(err.rawValue)")
         }
+    }
+
+    private func restoreMirrorTargets(_ targets: [CGDirectDisplayID: CGDirectDisplayID]) {
+        let displays = onlineDisplays()
+        guard displays.count > 1 else {
+            clearMirrorSnapshot()
+            return
+        }
+
+        var config: CGDisplayConfigRef?
+        CGBeginDisplayConfiguration(&config)
+
+        var restored: [CGDirectDisplayID] = []
+        let onlineSet = Set(displays)
+        for d in displays where d != CGMainDisplayID() {
+            var desired = targets[d] ?? kCGNullDirectDisplay
+            if desired != kCGNullDirectDisplay && !onlineSet.contains(desired) {
+                desired = kCGNullDirectDisplay
+            }
+            guard CGDisplayMirrorsDisplay(d) != desired else { continue }
+
+            CGConfigureDisplayMirrorOfDisplay(config, d, desired)
+            restored.append(d)
+        }
+
+        guard !restored.isEmpty else {
+            CGCancelDisplayConfiguration(config)
+            clearMirrorSnapshot()
+            NSLog("Mirroring restored from snapshot; no changes needed")
+            return
+        }
+
+        let err = CGCompleteDisplayConfiguration(config, .forSession)
+        if err == .success {
+            clearMirrorSnapshot()
+            NSLog("Mirroring restored from snapshot for \(restored.count) display(s)")
+        } else {
+            NSLog("Mirroring restore failed with error \(err.rawValue)")
+        }
+    }
+
+    private func onlineDisplays() -> [CGDirectDisplayID] {
+        var displays = [CGDirectDisplayID](repeating: 0, count: 16)
+        var count: UInt32 = 0
+        let err = CGGetOnlineDisplayList(UInt32(displays.count), &displays, &count)
+        guard err == .success else {
+            NSLog("Display list read failed with error \(err.rawValue)")
+            return []
+        }
+        return Array(displays.prefix(Int(count)))
+    }
+
+    private func currentMirrorTargets(
+        for displays: [CGDirectDisplayID],
+        main: CGDirectDisplayID
+    ) -> [CGDirectDisplayID: CGDirectDisplayID] {
+        var targets: [CGDirectDisplayID: CGDirectDisplayID] = [:]
+        for d in displays where d != main {
+            targets[d] = CGDisplayMirrorsDisplay(d)
+        }
+        return targets
+    }
+
+    private func hasMirrorSnapshot() -> Bool {
+        savedMirrorTargets != nil || UserDefaults.standard.data(forKey: mirrorSnapshotDefaultsKey) != nil
+    }
+
+    private func saveMirrorSnapshot(_ targets: [CGDirectDisplayID: CGDirectDisplayID]) {
+        let entries = targets.map {
+            MirrorSnapshotEntry(displayID: $0.key, mirrorsDisplayID: $0.value)
+        }
+        let snapshot = MirrorSnapshot(entries: entries)
+        if let data = try? JSONEncoder().encode(snapshot) {
+            UserDefaults.standard.set(data, forKey: mirrorSnapshotDefaultsKey)
+        }
+        savedMirrorTargets = targets
+    }
+
+    private func loadMirrorSnapshot() -> [CGDirectDisplayID: CGDirectDisplayID]? {
+        if let savedMirrorTargets {
+            return savedMirrorTargets
+        }
+        guard let data = UserDefaults.standard.data(forKey: mirrorSnapshotDefaultsKey),
+              let snapshot = try? JSONDecoder().decode(MirrorSnapshot.self, from: data) else {
+            return nil
+        }
+
+        var targets: [CGDirectDisplayID: CGDirectDisplayID] = [:]
+        for entry in snapshot.entries {
+            targets[entry.displayID] = entry.mirrorsDisplayID
+        }
+        savedMirrorTargets = targets
+        return targets
+    }
+
+    private func clearMirrorSnapshot() {
+        savedMirrorTargets = nil
+        UserDefaults.standard.removeObject(forKey: mirrorSnapshotDefaultsKey)
     }
 
     // MARK: Resolution
@@ -413,6 +556,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var retryScrollPermissionsItem: NSMenuItem!
     private var reverseMouseItem: NSMenuItem!
     private var reverseTrackpadItem: NSMenuItem!
+    private var restoreDisplaysItem: NSMenuItem!
     private var pollTimer: DispatchSourceTimer?
     private var hasShownScrollPermissionAlert = false
 
@@ -488,6 +632,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         retryScrollPermissionsItem.target = self
         retryScrollPermissionsItem.isHidden = true
         statusMenu.addItem(retryScrollPermissionsItem)
+
+        restoreDisplaysItem = NSMenuItem(title: "Restore Extended Displays", action: #selector(restoreExtendedDisplays), keyEquivalent: "")
+        restoreDisplaysItem.target = self
+        statusMenu.addItem(restoreDisplaysItem)
 
         statusMenu.addItem(.separator())
 
@@ -566,9 +714,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             screenCtl.restore()
             screenCtl.restoreResolution()
             screenCtl.restoreDock()
-            screenCtl.disableMirroring()
+            screenCtl.disableMirroring(forceFallback: true)
             screenCtl.lockScreen()
             updateStatus()
+        } else if !connected {
+            screenCtl.disableMirroring()
         }
     }
 
@@ -678,6 +828,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func retryScrollPermissions() {
         startScrollReverser(showAlert: false)
+    }
+
+    @objc private func restoreExtendedDisplays() {
+        screenCtl.restoreExtendedDisplays()
     }
 
     // MARK: - Auto Launch
