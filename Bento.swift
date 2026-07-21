@@ -1908,6 +1908,11 @@ enum MenuBarItemDrag {
     }
 }
 
+/// 顶对齐的 stack view（AppKit scroll view 默认底对齐，内容少时全堆在下半截）
+private class FlippedStackView: NSStackView {
+    override var isFlipped: Bool { true }
+}
+
 /// 菜单栏图标管理器：枚举/识别图标、维护隐藏集合、钉住 Bento 主图标
 class MenuBarIconManager: NSObject {
     /// 给管理界面用的一行数据
@@ -2254,7 +2259,7 @@ class MenuBarIconManager: NSObject {
         scroll.hasVerticalScroller = true
         scroll.borderType = .noBorder
 
-        let stack = NSStackView()
+        let stack = FlippedStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
