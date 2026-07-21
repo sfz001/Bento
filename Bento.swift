@@ -1882,27 +1882,53 @@ enum MenuBarItemDrag {
 
     /// 把菜单栏图标窗口拖到 dest（CG 坐标）。带 frame 变化等待与 5 次重试。
     /// boundsProvider 用于读取最新窗口位置。
+    ///
+    /// 鼠标安全要点（血泪教训）：
+    /// - 抓取（⌘+down）没生效时绝不能把 up 发到落点——落点往往在别的图标上，
+    ///   会被当成一次真实点击，把别的 App 的菜单点出来，焦点全乱
+    /// - 抓取可能半途悬着（down 已投递、up 丢失）：必须在原地补一个 up 闭合拖拽会话
+    /// - 合成事件会挪动系统光标位置，完事后要还原
     static func drag(_ windowID: CGWindowID, to dest: CGPoint, targetPID: pid_t,
                      boundsProvider: (CGWindowID) -> CGRect?) -> Bool {
         guard let source = eventSource() else { return false }
+        let savedCursor = CGEvent(source: nil)?.location
+        defer {
+            if let savedCursor { CGWarpMouseCursorPosition(savedCursor) }
+        }
+
         for _ in 0..<5 {
             guard let initial = boundsProvider(windowID) else { return false }
             guard let down = makeEvent(type: .leftMouseDown, point: CGPoint(x: 20000, y: 20000),
-                                       cmd: true, windowID: windowID, pid: targetPID, source: source),
-                  let up = makeEvent(type: .leftMouseUp, point: dest,
-                                     cmd: false, windowID: windowID, pid: targetPID, source: source)
+                                       cmd: true, windowID: windowID, pid: targetPID, source: source)
             else { return false }
 
-            _ = scrombleOne(down, type: .leftMouseDown, windowID: windowID, pid: targetPID)
+            let downDelivered = scrombleOne(down, type: .leftMouseDown, windowID: windowID, pid: targetPID)
+
             // 等待抓取生效（frame 开始变化）
+            var grabbed = false
             let grabDeadline = Date().addingTimeInterval(0.3)
             while Date() < grabDeadline {
-                if let b = boundsProvider(windowID), b != initial { break }
+                if let b = boundsProvider(windowID), b != initial { grabbed = true; break }
                 RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
             }
-            _ = scrombleOne(up, type: .leftMouseUp, windowID: windowID, pid: targetPID)
-            Thread.sleep(forTimeInterval: 0.15)
-            if let b = boundsProvider(windowID), b != initial { return true }
+
+            if downDelivered && grabbed {
+                // 抓取已生效才允许把 up 发到落点
+                if let up = makeEvent(type: .leftMouseUp, point: dest, cmd: false,
+                                      windowID: windowID, pid: targetPID, source: source) {
+                    _ = scrombleOne(up, type: .leftMouseUp, windowID: windowID, pid: targetPID)
+                }
+                Thread.sleep(forTimeInterval: 0.15)
+                if let b = boundsProvider(windowID), b != initial { return true }
+            } else if downDelivered, let current = boundsProvider(windowID) {
+                // 抓取没生效但 down 已投递：在图标原位置补一个 up，
+                // 闭合可能悬着的拖拽会话（原地释放，不会点到任何图标）
+                let center = CGPoint(x: current.midX, y: current.midY)
+                if let release = makeEvent(type: .leftMouseUp, point: center, cmd: false,
+                                           windowID: windowID, pid: targetPID, source: source) {
+                    _ = scrombleOne(release, type: .leftMouseUp, windowID: windowID, pid: targetPID)
+                }
+            }
         }
         return false
     }
@@ -1936,8 +1962,8 @@ class MenuBarIconManager: NSObject {
         didSet { UserDefaults.standard.set(Array(hiddenKeys), forKey: "HiddenMenuBarItemKeys") }
     }
 
-    /// 记忆窗口身份（隐藏后 AX 位置失效，靠启动初期建立的联系维持）
-    private var keyByWindowID: [CGWindowID: (key: String, name: String)] = [:]
+    /// 键 → 已确认的身份绑定（隐藏后 AX 位置会失效/串位，绑定优先于每轮的 AX 配对）
+    private var bindings: [String: (windowID: CGWindowID, name: String)] = [:]
     /// 用户刚点了"显示"的键：下一轮 enforce 时拖回可见侧（只拖一次）
     private var pendingShow: Set<String> = []
     /// 管理界面数据（主线程发布）
@@ -2040,6 +2066,21 @@ class MenuBarIconManager: NSObject {
         var result = IdentifyResult()
         var claimed = Set<CGWindowID>()
         let myPID = ProcessInfo.processInfo.processIdentifier
+        let windowByID = Dictionary(uniqueKeysWithValues: windows.map { ($0.id, $0) })
+
+        // 0) 已确认的绑定优先：窗口还在就直接认领。
+        //    离屏（被隐藏）图标的 AX 位置会失效/串位，靠位置重新配对会错认到别人窗口上
+        for (key, binding) in bindings {
+            guard let w = windowByID[binding.windowID] else {
+                // 窗口已销毁（App 退出/重建图标）：解绑，等重新出现时重新配对
+                bindings.removeValue(forKey: key)
+                continue
+            }
+            claimed.insert(w.id)
+            result.icons.append(MBIcon(windowID: w.id, bounds: w.bounds, onscreen: w.onscreen,
+                                       key: key, displayName: binding.name,
+                                       isSystem: false, isOurs: false))
+        }
 
         // 1) 自己的两个图标：自己进程的 AX extras 里，标记为 BentoHider 的是 hider，
         //    其余是主图标（macOS 26 上 button.window 为 nil，windowNumber 路线不可用；
@@ -2077,13 +2118,20 @@ class MenuBarIconManager: NSObject {
             let items = extras(of: pid)
             var index = 0
             for extra in items {
-                guard let w = matchWindow(for: extra, in: windows), !claimed.contains(w.id) else { continue }
-                claimed.insert(w.id)
+                guard let w = matchWindow(for: extra, in: windows) else { continue }
                 index += 1
                 // 键只含 bundleID+序号：title 可能是动态角标（如微信未读数），不能入键
                 let key = "\(bundleID)|\(index)"
+                if bindings[key] != nil {
+                    // 该键已有绑定：绑定优先（步骤 0 已认领绑定窗口），
+                    // 丢弃这次位置配对，防止离屏项的过期 AX 错配到别人窗口上
+                    continue
+                }
+                guard !claimed.contains(w.id) else { continue }
+                claimed.insert(w.id)
                 let human = !extra.title.isEmpty ? extra.title : (!extra.desc.isEmpty ? extra.desc : appName)
                 let name = human == appName ? human : "\(appName) · \(human)"
+                bindings[key] = (w.id, name) // 确认身份后立刻建立绑定
                 result.icons.append(MBIcon(windowID: w.id, bounds: w.bounds, onscreen: w.onscreen,
                                            key: key, displayName: name,
                                            isSystem: false, isOurs: false))
@@ -2103,11 +2151,6 @@ class MenuBarIconManager: NSObject {
         let boundsByID = Dictionary(uniqueKeysWithValues: windows.map { ($0.id, $0.bounds) })
         let identified = identify(windows: windows, ccPID: ccPID)
 
-        // 记住身份（隐藏后 AX 位置会失效）
-        for icon in identified.icons {
-            keyByWindowID[icon.windowID] = (icon.key, icon.displayName)
-        }
-
         let needHider = !hiddenKeys.isEmpty
 
         // —— hider 的创建/销毁/伸缩都在主线程做 ——
@@ -2119,16 +2162,19 @@ class MenuBarIconManager: NSObject {
         let liveBounds: (CGWindowID) -> CGRect? = { id in
             self.menuBarWindows().first { $0.id == id }?.bounds
         }
-        // 显示：只在用户显式取消隐藏时拖一次，与 hider 是否存在无关。
+        // hider 槽位右缘（无 hider 时为 0，pendingShow 落点退化为屏幕左侧）
+        let anchorX = identified.hiderWindow?.bounds.maxX ?? 0
+
+        // 显示：只在用户显式取消隐藏时拖一次。
         // 系统溢出挤出去的图标不主动抢，避免和系统的溢出管理打架
         if !pendingShow.isEmpty {
             let rightmostVisible = identified.icons
-                .filter { !$0.isSystem && $0.onscreen }
+                .filter { !$0.isSystem && $0.onscreen && $0.bounds.midX > anchorX }
                 .max(by: { $0.bounds.maxX < $1.bounds.maxX })
             for icon in identified.icons where !icon.isSystem && pendingShow.contains(icon.key) {
                 pendingShow.remove(icon.key)
-                if icon.onscreen { continue } // 已经可见
-                let destX = (rightmostVisible?.bounds.maxX ?? 800) + 8
+                if icon.onscreen && icon.bounds.midX > anchorX { continue } // 已经可见
+                let destX = (rightmostVisible?.bounds.maxX ?? anchorX) + 8
                 let ok = MenuBarItemDrag.drag(icon.windowID, to: CGPoint(x: destX, y: 0), targetPID: ccPID, boundsProvider: liveBounds)
                 if !ok { ErrorLog.log("图标管理: 显示拖拽失败 \(icon.displayName)") }
             }
@@ -2146,11 +2192,10 @@ class MenuBarIconManager: NSObject {
             DispatchQueue.main.async { self.expandHider() }
         }
 
-        guard let hiderWindow = identified.hiderWindow else {
+        guard identified.hiderWindow != nil else {
             ErrorLog.log("图标管理: hider 窗口未匹配（AX 配对失败）")
             return
         }
-        let anchorX = hiderWindow.bounds.maxX // hider 槽位右缘
 
         // —— 纠偏：还在可见侧的"应隐藏"图标拖进 hider ——
         for icon in identified.icons where !icon.isSystem {
@@ -2158,7 +2203,7 @@ class MenuBarIconManager: NSObject {
             let onVisibleSide = icon.onscreen && icon.bounds.midX > anchorX
             // 落点必须在 hider 巨宽窗口深处——浅落点（anchorX 附近）
             // 会被系统钳到 hider 右侧的可见槽位
-            if wantHidden && onVisibleSide {
+            if wantHidden && onVisibleSide, let hiderWindow = identified.hiderWindow {
                 let dropX = anchorX - hiderWindow.bounds.width / 2
                 let ok = MenuBarItemDrag.drag(icon.windowID, to: CGPoint(x: dropX, y: 0), targetPID: ccPID, boundsProvider: liveBounds)
                 if !ok { ErrorLog.log("图标管理: 隐藏拖拽失败 \(icon.displayName)") }
@@ -2194,10 +2239,10 @@ class MenuBarIconManager: NSObject {
             newRows.append(Row(key: icon.key, name: icon.displayName,
                                isHidden: hiddenKeys.contains(icon.key)))
         }
-        // 已隐藏但本次没识别出来的（AX 位置失效）：靠记忆补上行，保证还能取消隐藏
-        for (windowID, info) in keyByWindowID
-        where hiddenKeys.contains(info.key) && !seen.contains(windowID) {
-            newRows.append(Row(key: info.key, name: info.name, isHidden: true))
+        // 已隐藏但本次没识别出来的（窗口已销毁等）：靠绑定补上行，保证还能取消隐藏
+        for (key, binding) in bindings
+        where hiddenKeys.contains(key) && !seen.contains(binding.windowID) {
+            newRows.append(Row(key: key, name: binding.name, isHidden: true))
         }
         newRows.sort { $0.name.localizedCompare($1.name) == .orderedAscending }
         DispatchQueue.main.async {
@@ -2312,11 +2357,23 @@ class MenuBarIconManager: NSObject {
             checkbox.identifier = NSUserInterfaceItemIdentifier(row.key)
             stackView.addArrangedSubview(checkbox)
         }
+
+        // 逃生舱：一键全部恢复显示（比如图标被系统溢出卡住、或想推倒重来）
+        let showAll = NSButton(title: "全部恢复显示", target: self, action: #selector(showAllRows))
+        showAll.bezelStyle = .rounded
+        stackView.addArrangedSubview(showAll)
     }
 
     @objc private func rowToggled(_ sender: NSButton) {
         guard let key = sender.identifier?.rawValue else { return }
         setRowHidden(key, sender.state == .off)
+    }
+
+    @objc private func showAllRows() {
+        hiddenKeys.removeAll()
+        pendingShow.removeAll()
+        queue.async { self.enforce() }
+        rebuildManagerList()
     }
 }
 
