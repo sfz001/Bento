@@ -1974,6 +1974,13 @@ class MenuBarIconManager: NSObject {
     private var lastAutoDrag: [String: Date] = [:]
     /// 主图标最近一次钉位拖拽时间
     private var lastPinDrag = Date.distantPast
+    /// 图标顺序（左→右，与菜单栏一致），持久化
+    private var iconOrder: [String] = UserDefaults.standard.stringArray(forKey: "MenuBarIconOrder") ?? [] {
+        didSet { UserDefaults.standard.set(iconOrder, forKey: "MenuBarIconOrder") }
+    }
+    /// 排序应用限频；用户刚改过顺序时置 forceOrderApply 跳过一次限频
+    private var orderApplyCooldownUntil = Date.distantPast
+    private var forceOrderApply = false
     /// 管理界面数据（主线程发布）
     private(set) var rows: [Row] = []
     /// 列表更新回调（在主线程调用）
@@ -2192,6 +2199,7 @@ class MenuBarIconManager: NSObject {
             if hider != nil {
                 DispatchQueue.main.async { self.removeHider() }
             }
+            applyOrderIfNeeded(identified: identified, anchorX: 0, ccPID: ccPID, liveBounds: liveBounds)
             pinMainIcon(identified: identified, windows: windows, boundsByID: boundsByID, ccPID: ccPID, anchorX: nil)
             publishRows(identified: identified)
             return
@@ -2221,6 +2229,7 @@ class MenuBarIconManager: NSObject {
             }
         }
 
+        applyOrderIfNeeded(identified: identified, anchorX: anchorX, ccPID: ccPID, liveBounds: liveBounds)
         pinMainIcon(identified: identified, windows: windows, boundsByID: boundsByID, ccPID: ccPID, anchorX: anchorX)
         publishRows(identified: identified)
     }
@@ -2247,24 +2256,66 @@ class MenuBarIconManager: NSObject {
     }
 
     private func publishRows(identified: IdentifyResult) {
-        var newRows: [Row] = []
+        var rowsByKey: [String: Row] = [:]
         var seen = Set<CGWindowID>()
         for icon in identified.icons where !icon.isSystem {
             seen.insert(icon.windowID)
-            newRows.append(Row(key: icon.key, name: icon.displayName,
-                               isHidden: hiddenKeys.contains(icon.key)))
+            rowsByKey[icon.key] = Row(key: icon.key, name: icon.displayName,
+                                      isHidden: hiddenKeys.contains(icon.key))
         }
         // 已隐藏但本次没识别出来的（窗口已销毁等）：靠绑定补上行，保证还能取消隐藏
         for (key, binding) in bindings
         where hiddenKeys.contains(key) && !seen.contains(binding.windowID) {
-            newRows.append(Row(key: key, name: binding.name, isHidden: true))
+            rowsByKey[key] = Row(key: key, name: binding.name, isHidden: true)
         }
-        newRows.sort { $0.name.localizedCompare($1.name) == .orderedAscending }
+        // 新出现的键按当前菜单位置追加到顺序表末尾
+        for icon in identified.icons.filter({ !$0.isSystem }).sorted(by: { $0.bounds.minX < $1.bounds.minX })
+        where !iconOrder.contains(icon.key) {
+            iconOrder.append(icon.key)
+        }
+        let newRows = iconOrder.compactMap { rowsByKey[$0] }
         DispatchQueue.main.async {
             // 内容没变就不动 UI：管理窗口开着时，每轮重建复选框会把主线程打满
             guard self.rows != newRows else { return }
             self.rows = newRows
             self.onRowsChanged?()
+        }
+    }
+
+    /// 把 iconOrder 应用到真实菜单栏：可见的第三方图标按顺序从左到右排好。
+    /// 状态已是期望顺序时什么都不做；用户改顺序后由 forceOrderApply 触发一次。
+    private func applyOrderIfNeeded(identified: IdentifyResult, anchorX: CGFloat, ccPID: pid_t,
+                                    liveBounds: (CGWindowID) -> CGRect?) {
+        // 当前可见的第三方图标（在屏、hider 右侧、未被隐藏）
+        let visible = identified.icons.filter {
+            !$0.isSystem && $0.onscreen && $0.bounds.midX > anchorX && !hiddenKeys.contains($0.key)
+        }
+        let currentOrder = visible.sorted { $0.bounds.minX < $1.bounds.minX }.map { $0.key }
+        let desiredOrder = iconOrder.filter { currentOrder.contains($0) }
+        guard currentOrder != desiredOrder else { return }
+        guard forceOrderApply || Date() >= orderApplyCooldownUntil else { return }
+        orderApplyCooldownUntil = Date().addingTimeInterval(60)
+        forceOrderApply = false
+
+        let byKey = Dictionary(uniqueKeysWithValues: visible.map { ($0.key, $0) })
+        // 起点：hider 右缘；无 hider 时取当前最左可见图标的位置
+        var prevRightEdge = anchorX > 0 ? anchorX
+            : (visible.map { $0.bounds.minX }.min() ?? 800) - 4
+        // 从左到右，把每个期望图标拖到前一个的右边
+        for key in desiredOrder {
+            guard let icon = byKey[key] else { continue }
+            if abs(icon.bounds.minX - prevRightEdge) <= 2 {
+                prevRightEdge = icon.bounds.maxX // 已经就位
+                continue
+            }
+            let ok = MenuBarItemDrag.drag(icon.windowID, to: CGPoint(x: prevRightEdge + 4, y: 0),
+                                          targetPID: ccPID, boundsProvider: liveBounds)
+            ErrorLog.log("图标管理: 排序拖拽 \(icon.displayName) -> \(ok ? "成功" : "失败")")
+            if let b = liveBounds(icon.windowID) {
+                prevRightEdge = b.maxX
+            } else {
+                prevRightEdge += 40 // 读不回就按平均宽度估一个，别卡死后续图标
+            }
         }
     }
 
@@ -2358,7 +2409,7 @@ class MenuBarIconManager: NSObject {
         guard let stackView else { return }
         for v in stackView.arrangedSubviews { stackView.removeArrangedSubview(v); v.removeFromSuperview() }
 
-        let hint = NSTextField(wrappingLabelWithString: "勾选 = 显示，取消勾选 = 隐藏\n（时钟/电池等控制中心模块请在系统设置中管理）")
+        let hint = NSTextField(wrappingLabelWithString: "勾选 = 显示，取消勾选 = 隐藏；← → 调整顺序\n（时钟/电池等控制中心模块请在系统设置中管理）")
         hint.font = NSFont.systemFont(ofSize: 11)
         hint.textColor = .secondaryLabelColor
         stackView.addArrangedSubview(hint)
@@ -2369,10 +2420,22 @@ class MenuBarIconManager: NSObject {
             stackView.addArrangedSubview(empty)
         }
         for row in rows {
+            // 每行：☑ 名称  ← →（← 往菜单栏左移，→ 往右移）
+            let line = NSStackView()
+            line.orientation = .horizontal
+            line.spacing = 4
             let checkbox = NSButton(checkboxWithTitle: row.name, target: self, action: #selector(rowToggled(_:)))
             checkbox.state = row.isHidden ? .off : .on
             checkbox.identifier = NSUserInterfaceItemIdentifier(row.key)
-            stackView.addArrangedSubview(checkbox)
+            line.addArrangedSubview(checkbox)
+            for (symbol, action) in [("←", #selector(rowMoveLeft(_:))), ("→", #selector(rowMoveRight(_:)))] as [(String, Selector)] {
+                let button = NSButton(title: symbol, target: self, action: action)
+                button.bezelStyle = .inline
+                button.font = NSFont.systemFont(ofSize: 11)
+                button.identifier = NSUserInterfaceItemIdentifier(row.key)
+                line.addArrangedSubview(button)
+            }
+            stackView.addArrangedSubview(line)
         }
 
         // 逃生舱：一键全部恢复显示（比如图标被系统溢出卡住、或想推倒重来）
@@ -2384,6 +2447,30 @@ class MenuBarIconManager: NSObject {
     @objc private func rowToggled(_ sender: NSButton) {
         guard let key = sender.identifier?.rawValue else { return }
         setRowHidden(key, sender.state == .off)
+    }
+
+    /// ←：往菜单栏左边挪一位（清单里上移）
+    @objc private func rowMoveLeft(_ sender: NSButton) {
+        moveRow(sender, offset: -1)
+    }
+
+    /// →：往菜单栏右边挪一位（清单里下移）
+    @objc private func rowMoveRight(_ sender: NSButton) {
+        moveRow(sender, offset: 1)
+    }
+
+    private func moveRow(_ sender: NSButton, offset: Int) {
+        guard let key = sender.identifier?.rawValue,
+              let i = iconOrder.firstIndex(of: key) else { return }
+        let j = i + offset
+        guard iconOrder.indices.contains(j) else { return }
+        iconOrder.swapAt(i, j)
+        if let ri = rows.firstIndex(where: { $0.key == key }), rows.indices.contains(ri + offset) {
+            rows.swapAt(ri, ri + offset)
+        }
+        rebuildManagerList()
+        forceOrderApply = true
+        queue.async { self.enforce() }
     }
 
     @objc private func showAllRows() {
