@@ -2411,6 +2411,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let screenCtl = ScreenController()
     private let scrollReverser = ScrollReverser()
+    private var remoteMonitorEnabled = UserDefaults.standard.object(forKey: "RemoteMonitorEnabled") as? Bool ?? true
     private var scrollPermissionItem: NSMenuItem!
     private var openAccessibilityItem: NSMenuItem!
     private var openInputMonitoringItem: NSMenuItem!
@@ -2420,6 +2421,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var restoreDisplaysItem: NSMenuItem!
     // 分屏
     private let tiling = TilingController()
+    // 远程熄屏监控开关（默认开）
+    private var remoteMonitorItem: NSMenuItem!
     private var tilingMasterItem: NSMenuItem!
     private var tilingDoubleClickItem: NSMenuItem!
     private var tilingDragItem: NSMenuItem!
@@ -2448,7 +2451,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         startScrollReverser(showAlert: true)
         startTiling()
         iconMgr.start()
-        startPollTimer()
+        if remoteMonitorEnabled { startPollTimer() }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -2474,6 +2477,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusMenuItem = NSMenuItem(title: "Monitoring", action: nil, keyEquivalent: "")
         statusMenu.addItem(statusMenuItem)
+
+        remoteMonitorItem = NSMenuItem(title: "远程连接自动熄屏", action: #selector(toggleRemoteMonitor), keyEquivalent: "")
+        remoteMonitorItem.target = self
+        remoteMonitorItem.state = remoteMonitorEnabled ? .on : .off
+        statusMenu.addItem(remoteMonitorItem)
 
         scrollPermissionItem = NSMenuItem(title: "Scroll Permissions Needed", action: nil, keyEquivalent: "")
         scrollPermissionItem.isEnabled = false
@@ -2657,6 +2665,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             statusItem.button?.title = ""
             return
         }
+        if !remoteMonitorEnabled {
+            statusMenuItem.title = "远程熄屏监控已停用"
+            statusItem.button?.image = NSImage(systemSymbolName: "eye", accessibilityDescription: nil)
+            statusItem.button?.title = ""
+            return
+        }
         if screenCtl.isScreenBlack {
             statusMenuItem.title = "Remote Connected · Screen Off"
             statusItem.button?.image = NSImage(systemSymbolName: "eye.slash.fill", accessibilityDescription: nil)
@@ -2765,6 +2779,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleReverseMouse() {
         scrollReverser.reverseMouse.toggle()
         reverseMouseItem.state = scrollReverser.reverseMouse ? .on : .off
+    }
+
+    /// 远程熄屏总开关：停用时若正黑屏则立即恢复（不锁屏，用户在本地操作）
+    @objc private func toggleRemoteMonitor() {
+        remoteMonitorEnabled.toggle()
+        UserDefaults.standard.set(remoteMonitorEnabled, forKey: "RemoteMonitorEnabled")
+        remoteMonitorItem.state = remoteMonitorEnabled ? .on : .off
+        if remoteMonitorEnabled {
+            startPollTimer()
+        } else {
+            stopPollTimer()
+            if screenCtl.isScreenBlack {
+                screenCtl.restore()
+                screenCtl.restoreResolution()
+                screenCtl.restoreDock()
+                screenCtl.disableMirroring(forceFallback: true)
+            }
+        }
+        updateStatus()
     }
 
     @objc private func toggleReverseTrackpad() {

@@ -21,7 +21,8 @@ A single app for a grab-bag of small personal utilities. Currently: remote-conne
 - Dock 自动移到左侧并关闭自动隐藏，断开后恢复原始位置
 - 远程连接断开后，屏幕自动恢复并锁屏
 - 远程端画面不受影响，正常显示桌面
-- 菜单栏显示当前状态（监控中 / 已熄屏）
+- 菜单栏显示当前状态（监控中 / 已熄屏 / 已停用）
+- 菜单「远程连接自动熄屏」可整体开关此监控；停用时若正黑屏会立即恢复（不锁屏），选择自动持久化
 - 支持 FileVault AuthRestart（免密重启）
 
 #### 2. 滚动方向独立控制（Mos 风格）
@@ -81,7 +82,8 @@ open Bento.app
 - Dock repositioning: moves Dock to the left and disables auto-hide on connect, restores on disconnect
 - Restores the screen, multi-monitor layout, resolution, and Dock when the remote connection ends, then locks the screen
 - The remote viewer's display is unaffected
-- Menu bar icon shows current status (monitoring / screen off)
+- Menu bar icon shows current status (monitoring / screen off / disabled)
+- "远程连接自动熄屏" menu toggle enables/disables the whole monitor; if the screen is black when you disable it, everything restores immediately (no lock); choice persists
 - FileVault AuthRestart support (password-free reboot)
 
 #### 2. Independent scroll-direction control (Mos-style)
