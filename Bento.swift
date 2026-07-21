@@ -2260,6 +2260,14 @@ class MenuBarIconManager: NSObject {
         stack.spacing = 8
         stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
         scroll.documentView = stack
+        // documentView 必须钉住约束，否则 stack 会以 ~2x2 的零尺寸布局，肉眼一片空白
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        let clip = scroll.contentView
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: clip.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: clip.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: clip.trailingAnchor),
+        ])
         window.contentView = scroll
         stackView = stack
 
