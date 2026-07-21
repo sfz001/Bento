@@ -1981,6 +1981,10 @@ class MenuBarIconManager: NSObject {
     /// 排序应用限频；用户刚改过顺序时置 forceOrderApply 跳过一次限频
     private var orderApplyCooldownUntil = Date.distantPast
     private var forceOrderApply = false
+    /// 变更检测：上一轮的窗口签名和完整扫描时间（Ice 同款设计：
+    /// tick 只对比窗口 ID 列表，变了/有操作/超兜底间隔才做完整 AX 扫描）
+    private var lastSignature: [CGWindowID] = []
+    private var lastFullPass = Date.distantPast
     /// 管理界面数据（主线程发布）
     private(set) var rows: [Row] = []
     /// 列表更新回调（在主线程调用）
@@ -2163,10 +2167,22 @@ class MenuBarIconManager: NSObject {
         else { return }
 
         let windows = menuBarWindows()
+        let needHider = !hiddenKeys.isEmpty
+
+        // —— 门控：只有"真有事"才跑完整扫描（AX 遍历是重活）——
+        // 通过条件：用户操作（显示/排序）／hider 状态切换中／窗口签名变了／超过 60s 兜底
+        // 签名连变（行情类图标高频抖动）时，完整扫描至少间隔 10s
+        let signature = windows.map { $0.id }.sorted()
+        let explicit = forceOrderApply || !pendingShow.isEmpty
+        let stateTransition = needHider != (hider != nil) || (needHider && !hiderExpanded)
+        let stale = Date().timeIntervalSince(lastFullPass) > 60
+        let throttled = Date().timeIntervalSince(lastFullPass) < 10
+        guard explicit || stateTransition || stale || (signature != lastSignature && !throttled) else { return }
+        lastSignature = signature
+        lastFullPass = Date()
+
         let boundsByID = Dictionary(uniqueKeysWithValues: windows.map { ($0.id, $0.bounds) })
         let identified = identify(windows: windows, ccPID: ccPID)
-
-        let needHider = !hiddenKeys.isEmpty
 
         // —— hider 的创建/销毁/伸缩都在主线程做 ——
         if needHider, hider == nil {
