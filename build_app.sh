@@ -64,8 +64,13 @@ ensure_local_codesign_identity() {
         -keyout "$LOCAL_CODESIGN_DIR/BentoLocal.key" \
         -out "$LOCAL_CODESIGN_DIR/BentoLocal.crt"
 
+    # Legacy PBE/MAC algorithms: OpenSSL 3.x defaults produce a p12 that
+    # `security import` rejects with "MAC verification failed".
     openssl pkcs12 \
         -export \
+        -certpbe PBE-SHA1-3DES \
+        -keypbe PBE-SHA1-3DES \
+        -macalg sha1 \
         -out "$LOCAL_CODESIGN_DIR/BentoLocal.p12" \
         -inkey "$LOCAL_CODESIGN_DIR/BentoLocal.key" \
         -in "$LOCAL_CODESIGN_DIR/BentoLocal.crt" \
@@ -93,12 +98,14 @@ ensure_local_codesign_identity() {
 
 echo "Compiling $APP_NAME (Universal Binary)..."
 swiftc "$SCRIPT_DIR/$APP_NAME.swift" \
+    -O \
     -o "$SCRIPT_DIR/${APP_NAME}_arm64" \
     -target arm64-apple-macosx14.0 \
     -framework AppKit \
     -framework CoreGraphics \
     -framework IOKit
 swiftc "$SCRIPT_DIR/$APP_NAME.swift" \
+    -O \
     -o "$SCRIPT_DIR/${APP_NAME}_x86_64" \
     -target x86_64-apple-macosx14.0 \
     -framework AppKit \

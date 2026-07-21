@@ -3,6 +3,28 @@ import CoreGraphics
 import Foundation
 import IOKit
 
+// MARK: - Process Helper
+
+@discardableResult
+private func runProcess(_ path: String, _ args: [String], captureOutput: Bool = false) -> (status: Int32, output: String) {
+    let task = Process()
+    task.executableURL = URL(fileURLWithPath: path)
+    task.arguments = args
+    let pipe = captureOutput ? Pipe() : nil
+    task.standardOutput = pipe ?? FileHandle.nullDevice
+    task.standardError = FileHandle.nullDevice
+    do {
+        try task.run()
+    } catch {
+        return (-1, "")
+    }
+    // Drain the pipe before waiting so large output can't deadlock the child.
+    let data = pipe?.fileHandleForReading.readDataToEndOfFile() ?? Data()
+    task.waitUntilExit()
+    let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return (task.terminationStatus, output)
+}
+
 // MARK: - Screen Control
 
 class ScreenController {
@@ -207,7 +229,7 @@ class ScreenController {
 
     func switchResolution() {
         let main = CGMainDisplayID()
-        savedMode = CGDisplayCopyDisplayMode(main)
+        let currentMode = CGDisplayCopyDisplayMode(main)
 
         let options = [kCGDisplayShowDuplicateLowResolutionModes: kCFBooleanTrue] as CFDictionary
         guard let modes = CGDisplayCopyAllDisplayModes(main, options) as? [CGDisplayMode] else { return }
@@ -222,7 +244,10 @@ class ScreenController {
 
         let err = CGDisplaySetDisplayMode(main, mode, nil)
         if err == .success {
+            savedMode = currentMode
             NSLog("Resolution switched to \(targetWidth)x\(targetHeight) HiDPI")
+        } else {
+            NSLog("Resolution switch failed with error \(err.rawValue)")
         }
     }
 
@@ -242,78 +267,37 @@ class ScreenController {
     private var savedDockAutohide: Bool?
 
     func saveDockAndSetLeft() {
-        // Save current orientation
-        let orientTask = Process()
-        orientTask.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
-        orientTask.arguments = ["read", "com.apple.dock", "orientation"]
-        let orientPipe = Pipe()
-        orientTask.standardOutput = orientPipe
-        orientTask.standardError = FileHandle.nullDevice
-        try? orientTask.run()
-        orientTask.waitUntilExit()
-        let orientData = orientPipe.fileHandleForReading.readDataToEndOfFile()
-        savedDockOrientation = String(data: orientData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if savedDockOrientation?.isEmpty ?? true { savedDockOrientation = "bottom" }
+        let orientation = runProcess("/usr/bin/defaults", ["read", "com.apple.dock", "orientation"], captureOutput: true).output
+        savedDockOrientation = orientation.isEmpty ? "bottom" : orientation
+        let autohide = runProcess("/usr/bin/defaults", ["read", "com.apple.dock", "autohide"], captureOutput: true).output
+        savedDockAutohide = (autohide == "1")
 
-        // Save current autohide
-        let hideTask = Process()
-        hideTask.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
-        hideTask.arguments = ["read", "com.apple.dock", "autohide"]
-        let hidePipe = Pipe()
-        hideTask.standardOutput = hidePipe
-        hideTask.standardError = FileHandle.nullDevice
-        try? hideTask.run()
-        hideTask.waitUntilExit()
-        let hideData = hidePipe.fileHandleForReading.readDataToEndOfFile()
-        let hideStr = String(data: hideData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "0"
-        savedDockAutohide = (hideStr == "1")
-
-        // Set dock to left, no autohide
-        runDefaults(["write", "com.apple.dock", "orientation", "-string", "left"])
-        runDefaults(["write", "com.apple.dock", "autohide", "-bool", "false"])
+        runProcess("/usr/bin/defaults", ["write", "com.apple.dock", "orientation", "-string", "left"])
+        runProcess("/usr/bin/defaults", ["write", "com.apple.dock", "autohide", "-bool", "false"])
         restartDock()
         NSLog("Dock set to left, autohide off (was: \(savedDockOrientation ?? "?"), autohide: \(savedDockAutohide == true))")
     }
 
     func restoreDock() {
         guard let orientation = savedDockOrientation, let autohide = savedDockAutohide else { return }
-        runDefaults(["write", "com.apple.dock", "orientation", "-string", orientation])
-        runDefaults(["write", "com.apple.dock", "autohide", "-bool", autohide ? "true" : "false"])
+        runProcess("/usr/bin/defaults", ["write", "com.apple.dock", "orientation", "-string", orientation])
+        runProcess("/usr/bin/defaults", ["write", "com.apple.dock", "autohide", "-bool", autohide ? "true" : "false"])
         restartDock()
         NSLog("Dock restored to \(orientation), autohide: \(autohide)")
         savedDockOrientation = nil
         savedDockAutohide = nil
     }
 
-    private func runDefaults(_ args: [String]) {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
-        task.arguments = args
-        task.standardOutput = FileHandle.nullDevice
-        task.standardError = FileHandle.nullDevice
-        try? task.run()
-        task.waitUntilExit()
-    }
-
     private func restartDock() {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
-        task.arguments = ["Dock"]
-        task.standardOutput = FileHandle.nullDevice
-        task.standardError = FileHandle.nullDevice
-        try? task.run()
-        task.waitUntilExit()
+        runProcess("/usr/bin/killall", ["Dock"])
     }
 
     // MARK: Gamma Black
 
     func setBlack() {
         guard !isBlack else { return }
-        var displays = [CGDirectDisplayID](repeating: 0, count: 16)
-        var count: UInt32 = 0
-        CGGetOnlineDisplayList(16, &displays, &count)
-        for i in 0..<Int(count) {
-            CGSetDisplayTransferByFormula(displays[i], 0, 0, 1, 0, 0, 1, 0, 0, 1)
+        for d in onlineDisplays() {
+            CGSetDisplayTransferByFormula(d, 0, 0, 1, 0, 0, 1, 0, 0, 1)
         }
         isBlack = true
     }
@@ -325,10 +309,7 @@ class ScreenController {
     }
 
     func lockScreen() {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        task.arguments = ["-a", "ScreenSaverEngine"]
-        try? task.run()
+        runProcess("/usr/bin/open", ["-a", "ScreenSaverEngine"])
     }
 
     var isScreenBlack: Bool { isBlack }
@@ -441,14 +422,24 @@ class ScrollReverser {
     private var lastTouchTime: UInt64 = 0
     private var lastSource: ScrollInputSource = .mouse
 
+    // Cached so the per-scroll-event tap callback never touches UserDefaults.
+    private var cachedReverseMouse = UserDefaults.standard.object(forKey: prefReverseMouse) as? Bool ?? true
+    private var cachedReverseTrackpad = UserDefaults.standard.object(forKey: prefReverseTrackpad) as? Bool ?? false
+
     var reverseMouse: Bool {
-        get { UserDefaults.standard.object(forKey: prefReverseMouse) as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: prefReverseMouse) }
+        get { cachedReverseMouse }
+        set {
+            cachedReverseMouse = newValue
+            UserDefaults.standard.set(newValue, forKey: prefReverseMouse)
+        }
     }
 
     var reverseTrackpad: Bool {
-        get { UserDefaults.standard.object(forKey: prefReverseTrackpad) as? Bool ?? false }
-        set { UserDefaults.standard.set(newValue, forKey: prefReverseTrackpad) }
+        get { cachedReverseTrackpad }
+        set {
+            cachedReverseTrackpad = newValue
+            UserDefaults.standard.set(newValue, forKey: prefReverseTrackpad)
+        }
     }
 
     /// Returns true if the event taps were created. Returns false when the user
@@ -558,6 +549,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var reverseTrackpadItem: NSMenuItem!
     private var restoreDisplaysItem: NSMenuItem!
     private var pollTimer: DispatchSourceTimer?
+    private let pollQueue = DispatchQueue(label: "com.sz.bento.connection-poll")
     private var hasShownScrollPermissionAlert = false
 
     private let launchAgentLabel = "com.sz.bento"
@@ -572,7 +564,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupStatusBar()
         installAutoLaunch()
         startScrollReverser(showAlert: true)
-        pollConnectionState()
         startPollTimer()
     }
 
@@ -660,8 +651,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func startPollTimer() {
         stopPollTimer()
-        let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now() + 1, repeating: 1)
+        let timer = DispatchSource.makeTimerSource(queue: pollQueue)
+        timer.schedule(deadline: .now(), repeating: 1, leeway: .milliseconds(200))
         timer.setEventHandler { [weak self] in
             self?.pollConnectionState()
         }
@@ -675,30 +666,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func isRustDeskConnected() -> Bool {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        task.arguments = ["-fi", "rustdesk.*--cm"]
-        task.standardOutput = FileHandle.nullDevice
-        task.standardError = FileHandle.nullDevice
-        try? task.run()
-        task.waitUntilExit()
-        return task.terminationStatus == 0
+        runProcess("/usr/bin/pgrep", ["-fi", "rustdesk.*--cm"]).status == 0
     }
 
     private func isScreenSharingConnected() -> Bool {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/bin/sh")
-        task.arguments = ["-c", "netstat -an | grep '\\.5900 ' | grep -q ESTABLISHED"]
-        task.standardOutput = FileHandle.nullDevice
-        task.standardError = FileHandle.nullDevice
-        try? task.run()
-        task.waitUntilExit()
-        return task.terminationStatus == 0
+        // Match only the *local* address column ($4) so an outbound VNC
+        // connection from this Mac to another host's 5900 doesn't trigger.
+        let script = "/usr/sbin/netstat -an -p tcp | /usr/bin/awk '$4 ~ /\\.5900$/ && $6 == \"ESTABLISHED\" {found=1; exit} END {exit !found}'"
+        return runProcess("/bin/sh", ["-c", script]).status == 0
     }
 
+    /// Runs on pollQueue: process/netstat checks block, so they stay off the
+    /// main thread; state changes are applied back on main.
     private func pollConnectionState() {
         let rustdesk = isRustDeskConnected()
         let screenSharing = isScreenSharingConnected()
+        DispatchQueue.main.async { [weak self] in
+            self?.applyConnectionState(rustdesk: rustdesk, screenSharing: screenSharing)
+        }
+    }
+
+    private func applyConnectionState(rustdesk: Bool, screenSharing: Bool) {
         let connected = rustdesk || screenSharing
 
         if connected && !screenCtl.isScreenBlack {
@@ -796,12 +784,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Actions
 
     @objc private func authRestart() {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        task.arguments = ["-e", "tell application \"Terminal\" to do script \"sudo fdesetup authrestart\"", "-e", "tell application \"Terminal\" to activate"]
-        task.standardOutput = FileHandle.nullDevice
-        task.standardError = FileHandle.nullDevice
-        try? task.run()
+        runProcess("/usr/bin/osascript", [
+            "-e", "tell application \"Terminal\" to do script \"sudo fdesetup authrestart\"",
+            "-e", "tell application \"Terminal\" to activate",
+        ])
     }
 
     @objc private func quitApp() {
@@ -842,8 +828,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             "ProgramArguments": ["/usr/bin/open", "-a", Bundle.main.bundlePath],
             "RunAtLoad": true,
         ]
-        let data = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
-        try? data?.write(to: URL(fileURLWithPath: launchAgentPath))
+        guard let data = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0) else { return }
+        let url = URL(fileURLWithPath: launchAgentPath)
+        if let existing = try? Data(contentsOf: url), existing == data { return }
+        try? data.write(to: url)
     }
 
     /// One-time cleanup: remove the LaunchAgent from the previous app name
@@ -854,14 +842,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let oldPath = "\(home)/Library/LaunchAgents/\(legacyLaunchAgentLabel).plist"
         guard FileManager.default.fileExists(atPath: oldPath) else { return }
 
-        let unload = Process()
-        unload.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        unload.arguments = ["unload", oldPath]
-        unload.standardOutput = FileHandle.nullDevice
-        unload.standardError = FileHandle.nullDevice
-        try? unload.run()
-        unload.waitUntilExit()
-
+        runProcess("/bin/launchctl", ["unload", oldPath])
         try? FileManager.default.removeItem(atPath: oldPath)
         NSLog("Migration: removed legacy LaunchAgent \(legacyLaunchAgentLabel)")
     }
