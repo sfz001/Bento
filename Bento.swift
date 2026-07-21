@@ -2066,11 +2066,13 @@ class MenuBarIconManager: NSObject {
             }
         }
 
-        // 3) 第三方图标：遍历各 App 的 AXExtrasMenuBar
+        // 3) 第三方图标：遍历各 App 的 AXExtrasMenuBar。
+        //    注意 Spotlight/输入法/Siri 等系统代理的图标也是普通 extras 项，
+        //    只排除控制中心自身（它的模块走上面的 com.apple.menuextra.* 路线）
         for runningApp in NSWorkspace.shared.runningApplications {
             let pid = runningApp.processIdentifier
             guard pid != myPID, let bundleID = runningApp.bundleIdentifier,
-                  !bundleID.hasPrefix("com.apple.") else { continue }
+                  bundleID != "com.apple.controlcenter" else { continue }
             let appName = runningApp.localizedName ?? bundleID
             let items = extras(of: pid)
             var index = 0
@@ -2080,7 +2082,8 @@ class MenuBarIconManager: NSObject {
                 index += 1
                 // 键只含 bundleID+序号：title 可能是动态角标（如微信未读数），不能入键
                 let key = "\(bundleID)|\(index)"
-                let name = extra.title.isEmpty || extra.title == appName ? appName : "\(appName) · \(extra.title)"
+                let human = !extra.title.isEmpty ? extra.title : (!extra.desc.isEmpty ? extra.desc : appName)
+                let name = human == appName ? human : "\(appName) · \(human)"
                 result.icons.append(MBIcon(windowID: w.id, bounds: w.bounds, onscreen: w.onscreen,
                                            key: key, displayName: name,
                                            isSystem: false, isOurs: false))
@@ -2293,7 +2296,7 @@ class MenuBarIconManager: NSObject {
         guard let stackView else { return }
         for v in stackView.arrangedSubviews { stackView.removeArrangedSubview(v); v.removeFromSuperview() }
 
-        let hint = NSTextField(wrappingLabelWithString: "勾选 = 显示，取消勾选 = 隐藏\n（系统图标请在 系统设置 → 控制中心 中管理）")
+        let hint = NSTextField(wrappingLabelWithString: "勾选 = 显示，取消勾选 = 隐藏\n（时钟/电池等控制中心模块请在系统设置中管理）")
         hint.font = NSFont.systemFont(ofSize: 11)
         hint.textColor = .secondaryLabelColor
         stackView.addArrangedSubview(hint)
