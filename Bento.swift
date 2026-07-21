@@ -1893,10 +1893,14 @@ enum MenuBarItemDrag {
         guard let source = eventSource() else { return false }
         let savedCursor = CGEvent(source: nil)?.location
         defer {
-            if let savedCursor { CGWarpMouseCursorPosition(savedCursor) }
+            // 只在光标确实被合成事件挪动了才还原，避免无谓的 cursor warp
+            if let savedCursor, let now = CGEvent(source: nil)?.location,
+               abs(now.x - savedCursor.x) > 1 || abs(now.y - savedCursor.y) > 1 {
+                CGWarpMouseCursorPosition(savedCursor)
+            }
         }
 
-        for _ in 0..<5 {
+        for _ in 0..<3 {
             guard let initial = boundsProvider(windowID) else { return false }
             guard let down = makeEvent(type: .leftMouseDown, point: CGPoint(x: 20000, y: 20000),
                                        cmd: true, windowID: windowID, pid: targetPID, source: source)
@@ -1942,7 +1946,7 @@ private class FlippedStackView: NSStackView {
 /// 菜单栏图标管理器：枚举/识别图标、维护隐藏集合、钉住 Bento 主图标
 class MenuBarIconManager: NSObject {
     /// 给管理界面用的一行数据
-    struct Row {
+    struct Row: Equatable {
         let key: String
         let name: String
         let isHidden: Bool
@@ -1966,6 +1970,10 @@ class MenuBarIconManager: NSObject {
     private var bindings: [String: (windowID: CGWindowID, name: String)] = [:]
     /// 用户刚点了"显示"的键：下一轮 enforce 时拖回可见侧（只拖一次）
     private var pendingShow: Set<String> = []
+    /// 每个键最近一次自动隐藏拖拽时间：状态反复不收敛时限频，防止合成事件风暴
+    private var lastAutoDrag: [String: Date] = [:]
+    /// 主图标最近一次钉位拖拽时间
+    private var lastPinDrag = Date.distantPast
     /// 管理界面数据（主线程发布）
     private(set) var rows: [Row] = []
     /// 列表更新回调（在主线程调用）
@@ -2204,9 +2212,12 @@ class MenuBarIconManager: NSObject {
             // 落点必须在 hider 巨宽窗口深处——浅落点（anchorX 附近）
             // 会被系统钳到 hider 右侧的可见槽位
             if wantHidden && onVisibleSide, let hiderWindow = identified.hiderWindow {
+                // 限频：同一个键 60s 内只自动拖一次，防止状态不收敛时合成事件刷屏
+                if let last = lastAutoDrag[icon.key], Date().timeIntervalSince(last) < 60 { continue }
+                lastAutoDrag[icon.key] = Date()
                 let dropX = anchorX - hiderWindow.bounds.width / 2
                 let ok = MenuBarItemDrag.drag(icon.windowID, to: CGPoint(x: dropX, y: 0), targetPID: ccPID, boundsProvider: liveBounds)
-                if !ok { ErrorLog.log("图标管理: 隐藏拖拽失败 \(icon.displayName)") }
+                ErrorLog.log("图标管理: 自动隐藏拖拽 \(icon.displayName) -> \(ok ? "成功" : "失败")")
             }
         }
 
@@ -2223,11 +2234,15 @@ class MenuBarIconManager: NSObject {
         let candidates = thirdParty.filter { $0.onscreen && (anchorX == nil || $0.bounds.midX > anchorX!) }
         guard let rightmost = candidates.max(by: { $0.bounds.maxX < $1.bounds.maxX }) else { return }
         if mainWindow.bounds.maxX < rightmost.bounds.maxX - 0.5 {
+            // 限频：60s 内最多钉一次
+            guard Date().timeIntervalSince(lastPinDrag) >= 60 else { return }
+            lastPinDrag = Date()
             let liveBounds: (CGWindowID) -> CGRect? = { id in
                 self.menuBarWindows().first { $0.id == id }?.bounds
             }
-            _ = MenuBarItemDrag.drag(mainWindow.id, to: CGPoint(x: rightmost.bounds.maxX + 4, y: 0),
-                                     targetPID: ccPID, boundsProvider: liveBounds)
+            let ok = MenuBarItemDrag.drag(mainWindow.id, to: CGPoint(x: rightmost.bounds.maxX + 4, y: 0),
+                                          targetPID: ccPID, boundsProvider: liveBounds)
+            if !ok { ErrorLog.log("图标管理: 主图标钉位拖拽失败") }
         }
     }
 
@@ -2246,6 +2261,8 @@ class MenuBarIconManager: NSObject {
         }
         newRows.sort { $0.name.localizedCompare($1.name) == .orderedAscending }
         DispatchQueue.main.async {
+            // 内容没变就不动 UI：管理窗口开着时，每轮重建复选框会把主线程打满
+            guard self.rows != newRows else { return }
             self.rows = newRows
             self.onRowsChanged?()
         }
