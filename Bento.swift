@@ -1749,6 +1749,569 @@ class TilingController: NSObject {
     }
 }
 
+// MARK: - Menu Bar Icon Manager (菜单栏图标管理)
+
+// 实现要点（全部在 macOS 26 上实测验证）：
+// - macOS 26 起所有菜单栏图标窗口都由「控制中心」进程托管（pid 相同），
+//   身份识别走各 App 自己的 AXExtrasMenuBar（含 title/desc/位置），
+//   再按 AX frame 中点与 CG 窗口中点配对（两者几乎重合，容差 ±10）
+// - 移动图标 = 合成 ⌘ 拖拽：事件带 windowID 字段(0x33)，经
+//   null 事件 → tapCreateForPid 转发 → session tap 回投 pid 的 scromble 流程投递
+// - 隐藏图标 = 自家一个 10000pt 宽的状态栏项(hider)把左侧图标挤出屏幕（系统溢出行为）；
+//   Bento 退出时 hider 销毁，被隐藏的图标自动回来（天然兜底）
+// - 系统图标（时钟/电池等）不纳入管理，由系统设置 → 控制中心管理
+
+private let mbWindowIDField = CGEventField(rawValue: 0x33)!
+private let mbPermitAll: CGEventFilterMask = [.permitLocalMouseEvents, .permitLocalKeyboardEvents, .permitSystemDefinedEvents]
+
+/// 菜单栏图标窗口（CG 层）
+struct MBItemWindow {
+    let id: CGWindowID
+    let bounds: CGRect // CG 坐标
+    let onscreen: Bool
+}
+
+/// 身份识别后的菜单栏图标
+struct MBIcon {
+    let windowID: CGWindowID
+    let bounds: CGRect
+    let onscreen: Bool
+    let key: String       // 持久化键
+    let displayName: String
+    let isSystem: Bool
+    let isOurs: Bool
+}
+
+/// scromble 投递用的上下文（跨 C 回调传递）
+private final class MBDragBox {
+    var realEvent: CGEvent?
+    var nullUserData: Int64 = 0
+    var realWindowID: Int64 = 0
+    var done = false
+    var pid: pid_t = 0
+    var tap1: CFMachPort?
+    var tap2: CFMachPort?
+}
+
+/// 菜单栏图标合成拖拽器。所有方法必须在带 RunLoop 的后台线程调用（内部自旋 RunLoop）。
+enum MenuBarItemDrag {
+
+    private static func eventSource() -> CGEventSource? {
+        guard let s = CGEventSource(stateID: .hidSystemState) else { return nil }
+        s.setLocalEventsFilterDuringSuppressionState(mbPermitAll, state: .eventSuppressionStateRemoteMouseDrag)
+        s.setLocalEventsFilterDuringSuppressionState(mbPermitAll, state: .eventSuppressionStateSuppressionInterval)
+        s.localEventsSuppressionInterval = 0
+        return s
+    }
+
+    private static func makeEvent(type: CGEventType, point: CGPoint, cmd: Bool,
+                                  windowID: CGWindowID, pid: pid_t, source: CGEventSource) -> CGEvent? {
+        guard let e = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .left)
+        else { return nil }
+        e.flags = cmd ? .maskCommand : []
+        e.setIntegerValueField(.eventTargetUnixProcessID, value: Int64(pid))
+        e.setIntegerValueField(.eventSourceUserData, value: Int64(Int(bitPattern: ObjectIdentifier(e))))
+        e.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: Int64(windowID))
+        e.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: Int64(windowID))
+        e.setIntegerValueField(mbWindowIDField, value: Int64(windowID))
+        return e
+    }
+
+    /// 单个事件的 scromble 投递：null 事件 → pid tap 转发到 session → session tap 回投 pid
+    private static func scrombleOne(_ real: CGEvent, type: CGEventType, windowID: CGWindowID, pid: pid_t) -> Bool {
+        guard let nullEvent = CGEvent(source: nil) else { return false }
+        let box = MBDragBox()
+        box.realEvent = real
+        box.realWindowID = Int64(windowID)
+        box.pid = pid
+        box.nullUserData = Int64(Int(bitPattern: ObjectIdentifier(nullEvent)))
+        nullEvent.setIntegerValueField(.eventSourceUserData, value: box.nullUserData)
+
+        let nullCb: CGEventTapCallBack = { _, type, event, userInfo in
+            guard let userInfo else { return Unmanaged.passUnretained(event) }
+            let box = Unmanaged<MBDragBox>.fromOpaque(userInfo).takeUnretainedValue()
+            if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                if let t = box.tap1 { CGEvent.tapEnable(tap: t, enable: true) }
+                return Unmanaged.passUnretained(event)
+            }
+            if event.getIntegerValueField(.eventSourceUserData) == box.nullUserData {
+                if let t = box.tap1 { CGEvent.tapEnable(tap: t, enable: false) }
+                box.realEvent?.post(tap: .cgSessionEventTap)
+                return nil
+            }
+            return Unmanaged.passUnretained(event)
+        }
+        let realCb: CGEventTapCallBack = { _, type, event, userInfo in
+            guard let userInfo else { return Unmanaged.passUnretained(event) }
+            let box = Unmanaged<MBDragBox>.fromOpaque(userInfo).takeUnretainedValue()
+            if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                if let t = box.tap2 { CGEvent.tapEnable(tap: t, enable: true) }
+                return Unmanaged.passUnretained(event)
+            }
+            if event.getIntegerValueField(mbWindowIDField) == box.realWindowID {
+                if let t = box.tap2 { CGEvent.tapEnable(tap: t, enable: false) }
+                box.realEvent?.postToPid(box.pid)
+                box.done = true
+            }
+            return Unmanaged.passUnretained(event)
+        }
+        let boxPtr = Unmanaged.passUnretained(box).toOpaque()
+        guard let tap1 = CGEvent.tapCreateForPid(pid: pid, place: .tailAppendEventTap, options: .defaultTap,
+                                                 eventsOfInterest: 1 << CGEventType.null.rawValue,
+                                                 callback: nullCb, userInfo: boxPtr),
+              let tap2 = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .tailAppendEventTap, options: .listenOnly,
+                                           eventsOfInterest: 1 << type.rawValue, callback: realCb, userInfo: boxPtr)
+        else { return false }
+        box.tap1 = tap1
+        box.tap2 = tap2
+        let src1 = CFMachPortCreateRunLoopSource(nil, tap1, 0)
+        let src2 = CFMachPortCreateRunLoopSource(nil, tap2, 0)
+        CFRunLoopAddSource(CFRunLoopGetCurrent(), src1, .commonModes)
+        CFRunLoopAddSource(CFRunLoopGetCurrent(), src2, .commonModes)
+        CGEvent.tapEnable(tap: tap1, enable: true)
+        CGEvent.tapEnable(tap: tap2, enable: true)
+        nullEvent.postToPid(pid)
+        let deadline = Date().addingTimeInterval(0.3)
+        while !box.done && Date() < deadline {
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+        }
+        CFMachPortInvalidate(tap1)
+        CFMachPortInvalidate(tap2)
+        return box.done
+    }
+
+    /// 把菜单栏图标窗口拖到 dest（CG 坐标）。带 frame 变化等待与 5 次重试。
+    /// boundsProvider 用于读取最新窗口位置。
+    static func drag(_ windowID: CGWindowID, to dest: CGPoint, targetPID: pid_t,
+                     boundsProvider: (CGWindowID) -> CGRect?) -> Bool {
+        guard let source = eventSource() else { return false }
+        for _ in 0..<5 {
+            guard let initial = boundsProvider(windowID) else { return false }
+            guard let down = makeEvent(type: .leftMouseDown, point: CGPoint(x: 20000, y: 20000),
+                                       cmd: true, windowID: windowID, pid: targetPID, source: source),
+                  let up = makeEvent(type: .leftMouseUp, point: dest,
+                                     cmd: false, windowID: windowID, pid: targetPID, source: source)
+            else { return false }
+
+            _ = scrombleOne(down, type: .leftMouseDown, windowID: windowID, pid: targetPID)
+            // 等待抓取生效（frame 开始变化）
+            let grabDeadline = Date().addingTimeInterval(0.3)
+            while Date() < grabDeadline {
+                if let b = boundsProvider(windowID), b != initial { break }
+                RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+            }
+            _ = scrombleOne(up, type: .leftMouseUp, windowID: windowID, pid: targetPID)
+            Thread.sleep(forTimeInterval: 0.15)
+            if let b = boundsProvider(windowID), b != initial { return true }
+        }
+        return false
+    }
+}
+
+/// 菜单栏图标管理器：枚举/识别图标、维护隐藏集合、钉住 Bento 主图标
+class MenuBarIconManager: NSObject {
+    /// 给管理界面用的一行数据
+    struct Row {
+        let key: String
+        let name: String
+        let isHidden: Bool
+    }
+
+    private let queue = DispatchQueue(label: "com.sz.bento.iconmgr")
+    private var timer: Timer?
+    private var hider: NSStatusItem?
+    private var hiderExpanded = false
+    private var managerWindow: NSWindow?
+    private var stackView: NSStackView?
+
+    /// 持久化的隐藏键集合
+    private var hiddenKeys: Set<String> = {
+        Set(UserDefaults.standard.stringArray(forKey: "HiddenMenuBarItemKeys") ?? [])
+    }() {
+        didSet { UserDefaults.standard.set(Array(hiddenKeys), forKey: "HiddenMenuBarItemKeys") }
+    }
+
+    /// 记忆窗口身份（隐藏后 AX 位置失效，靠启动初期建立的联系维持）
+    private var keyByWindowID: [CGWindowID: (key: String, name: String)] = [:]
+    /// 用户刚点了"显示"的键：下一轮 enforce 时拖回可见侧（只拖一次）
+    private var pendingShow: Set<String> = []
+    /// 管理界面数据（主线程发布）
+    private(set) var rows: [Row] = []
+    /// 列表更新回调（在主线程调用）
+    var onRowsChanged: (() -> Void)?
+
+    // MARK: 生命周期
+
+    func start() {
+        // 首次延迟 2s，等菜单栏和自己图标就位
+        queue.asyncAfter(deadline: .now() + 2) { [weak self] in self?.enforce() }
+        let t = Timer(timeInterval: 3, repeats: true) { [weak self] _ in
+            self?.queue.async { self?.enforce() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+        if let hider { NSStatusBar.system.removeStatusItem(hider) }
+        hider = nil
+    }
+
+    // MARK: 窗口枚举与身份识别（后台线程）
+
+    private func menuBarWindows() -> [MBItemWindow] {
+        guard let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]]
+        else { return [] }
+        var out: [MBItemWindow] = []
+        for info in list {
+            guard let layer = info[kCGWindowLayer as String] as? Int, layer == 25,
+                  let number = info[kCGWindowNumber as String] as? CGWindowID,
+                  let bd = info[kCGWindowBounds as String] as? NSDictionary,
+                  let b = CGRect(dictionaryRepresentation: bd as CFDictionary)
+            else { continue }
+            out.append(MBItemWindow(id: number, bounds: b,
+                                    onscreen: info[kCGWindowIsOnscreen as String] as? Bool ?? false))
+        }
+        return out.sorted { $0.bounds.minX < $1.bounds.minX }
+    }
+
+    private struct ExtraItem {
+        let midX: CGFloat
+        let title: String
+        let desc: String
+        let axIdentifier: String
+    }
+
+    /// 读某个进程的 AXExtrasMenuBar 子元素
+    private func extras(of pid: pid_t) -> [ExtraItem] {
+        let app = AXUIElementCreateApplication(pid)
+        var extrasValue: AnyObject?
+        guard AXUIElementCopyAttributeValue(app, "AXExtrasMenuBar" as CFString, &extrasValue) == .success,
+              let bar = extrasValue
+        else { return [] }
+        var children: AnyObject?
+        AXUIElementCopyAttributeValue(bar as! AXUIElement, kAXChildrenAttribute as CFString, &children)
+        var out: [ExtraItem] = []
+        for el in children as? [AXUIElement] ?? [] {
+            var title: AnyObject?, desc: AnyObject?, pos: AnyObject?, size: AnyObject?, ident: AnyObject?
+            AXUIElementCopyAttributeValue(el, kAXTitleAttribute as CFString, &title)
+            AXUIElementCopyAttributeValue(el, kAXDescriptionAttribute as CFString, &desc)
+            AXUIElementCopyAttributeValue(el, kAXPositionAttribute as CFString, &pos)
+            AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &size)
+            AXUIElementCopyAttributeValue(el, kAXIdentifierAttribute as CFString, &ident)
+            var p = CGPoint.zero
+            var s = CGSize.zero
+            if let pos { AXValueGetValue(pos as! AXValue, .cgPoint, &p) }
+            if let size { AXValueGetValue(size as! AXValue, .cgSize, &s) }
+            guard s.width > 0 else { continue } // 无尺寸的是占位/系统隐藏项
+            out.append(ExtraItem(midX: p.x + s.width / 2,
+                                 title: (title as? String) ?? "",
+                                 desc: (desc as? String) ?? "",
+                                 axIdentifier: (ident as? String) ?? ""))
+        }
+        return out
+    }
+
+    /// 把 AX extra 与 CG 窗口配对：优先包含关系，兜底最近中点（±10）
+    private func matchWindow(for extra: ExtraItem, in windows: [MBItemWindow]) -> MBItemWindow? {
+        if let hit = windows.first(where: {
+            extra.midX >= $0.bounds.minX - 4 && extra.midX <= $0.bounds.maxX + 4
+        }) { return hit }
+        guard let best = windows.min(by: {
+            abs($0.bounds.midX - extra.midX) < abs($1.bounds.midX - extra.midX)
+        }), abs(best.bounds.midX - extra.midX) < 10 else { return nil }
+        return best
+    }
+
+    private struct IdentifyResult {
+        var icons: [MBIcon] = []              // 已识别的第三方图标（不含自己的）
+        var mainIconWindow: MBItemWindow?     // Bento 主图标
+        var hiderWindow: MBItemWindow?        // Bento hider
+    }
+
+    private func identify(windows: [MBItemWindow], ccPID: pid_t?) -> IdentifyResult {
+        var result = IdentifyResult()
+        var claimed = Set<CGWindowID>()
+        let myPID = ProcessInfo.processInfo.processIdentifier
+
+        // 1) 自己的两个图标：自己进程的 AX extras 里，标记为 BentoHider 的是 hider，
+        //    其余是主图标（macOS 26 上 button.window 为 nil，windowNumber 路线不可用；
+        //    主图标的 AXDescription 是 SF Symbol 自带描述 "show"，也不可用，故用排除法）
+        for extra in extras(of: myPID) {
+            guard let w = matchWindow(for: extra, in: windows) else { continue }
+            claimed.insert(w.id)
+            if extra.desc == "BentoHider" || extra.title == "BentoHider" {
+                result.hiderWindow = w
+            } else {
+                result.mainIconWindow = w
+            }
+        }
+
+        // 2) 系统图标（控制中心的 extras，带 com.apple.menuextra.* 标识）
+        if let ccPID {
+            for extra in extras(of: ccPID) where extra.axIdentifier.hasPrefix("com.apple.") {
+                guard let w = matchWindow(for: extra, in: windows), !claimed.contains(w.id) else { continue }
+                claimed.insert(w.id)
+                result.icons.append(MBIcon(windowID: w.id, bounds: w.bounds, onscreen: w.onscreen,
+                                           key: extra.axIdentifier,
+                                           displayName: extra.desc.isEmpty ? extra.axIdentifier : extra.desc,
+                                           isSystem: true, isOurs: false))
+            }
+        }
+
+        // 3) 第三方图标：遍历各 App 的 AXExtrasMenuBar
+        for runningApp in NSWorkspace.shared.runningApplications {
+            let pid = runningApp.processIdentifier
+            guard pid != myPID, let bundleID = runningApp.bundleIdentifier,
+                  !bundleID.hasPrefix("com.apple.") else { continue }
+            let appName = runningApp.localizedName ?? bundleID
+            let items = extras(of: pid)
+            var index = 0
+            for extra in items {
+                guard let w = matchWindow(for: extra, in: windows), !claimed.contains(w.id) else { continue }
+                claimed.insert(w.id)
+                index += 1
+                // 键只含 bundleID+序号：title 可能是动态角标（如微信未读数），不能入键
+                let key = "\(bundleID)|\(index)"
+                let name = extra.title.isEmpty || extra.title == appName ? appName : "\(appName) · \(extra.title)"
+                result.icons.append(MBIcon(windowID: w.id, bounds: w.bounds, onscreen: w.onscreen,
+                                           key: key, displayName: name,
+                                           isSystem: false, isOurs: false))
+            }
+        }
+        return result
+    }
+
+    // MARK: 状态纠正（每 3s，后台线程）
+
+    private func enforce() {
+        guard AXIsProcessTrustedWithOptions(nil) else { return }
+        guard let ccPID = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.controlcenter").first?.processIdentifier
+        else { return }
+
+        let windows = menuBarWindows()
+        let boundsByID = Dictionary(uniqueKeysWithValues: windows.map { ($0.id, $0.bounds) })
+        let identified = identify(windows: windows, ccPID: ccPID)
+
+        // 记住身份（隐藏后 AX 位置会失效）
+        for icon in identified.icons {
+            keyByWindowID[icon.windowID] = (icon.key, icon.displayName)
+        }
+
+        let needHider = !hiddenKeys.isEmpty
+
+        // —— hider 的创建/销毁/伸缩都在主线程做 ——
+        if needHider, hider == nil {
+            DispatchQueue.main.async { self.createHider() }
+            return // 下个 tick 再继续
+        }
+        // boundsProvider 必须实时重读（拖拽期间位置在变，快照会失效）
+        let liveBounds: (CGWindowID) -> CGRect? = { id in
+            self.menuBarWindows().first { $0.id == id }?.bounds
+        }
+        // 显示：只在用户显式取消隐藏时拖一次，与 hider 是否存在无关。
+        // 系统溢出挤出去的图标不主动抢，避免和系统的溢出管理打架
+        if !pendingShow.isEmpty {
+            let rightmostVisible = identified.icons
+                .filter { !$0.isSystem && $0.onscreen }
+                .max(by: { $0.bounds.maxX < $1.bounds.maxX })
+            for icon in identified.icons where !icon.isSystem && pendingShow.contains(icon.key) {
+                pendingShow.remove(icon.key)
+                if icon.onscreen { continue } // 已经可见
+                let destX = (rightmostVisible?.bounds.maxX ?? 800) + 8
+                let ok = MenuBarItemDrag.drag(icon.windowID, to: CGPoint(x: destX, y: 0), targetPID: ccPID, boundsProvider: liveBounds)
+                if !ok { ErrorLog.log("图标管理: 显示拖拽失败 \(icon.displayName)") }
+            }
+            pendingShow.removeAll()
+        }
+        if !needHider {
+            if hider != nil {
+                DispatchQueue.main.async { self.removeHider() }
+            }
+            pinMainIcon(identified: identified, windows: windows, boundsByID: boundsByID, ccPID: ccPID, anchorX: nil)
+            publishRows(identified: identified)
+            return
+        }
+        if !hiderExpanded {
+            DispatchQueue.main.async { self.expandHider() }
+        }
+
+        guard let hiderWindow = identified.hiderWindow else {
+            ErrorLog.log("图标管理: hider 窗口未匹配（AX 配对失败）")
+            return
+        }
+        let anchorX = hiderWindow.bounds.maxX // hider 槽位右缘
+
+        // —— 纠偏：还在可见侧的"应隐藏"图标拖进 hider ——
+        for icon in identified.icons where !icon.isSystem {
+            let wantHidden = hiddenKeys.contains(icon.key)
+            let onVisibleSide = icon.onscreen && icon.bounds.midX > anchorX
+            // 落点必须在 hider 巨宽窗口深处——浅落点（anchorX 附近）
+            // 会被系统钳到 hider 右侧的可见槽位
+            if wantHidden && onVisibleSide {
+                let dropX = anchorX - hiderWindow.bounds.width / 2
+                let ok = MenuBarItemDrag.drag(icon.windowID, to: CGPoint(x: dropX, y: 0), targetPID: ccPID, boundsProvider: liveBounds)
+                if !ok { ErrorLog.log("图标管理: 隐藏拖拽失败 \(icon.displayName)") }
+            }
+        }
+
+        pinMainIcon(identified: identified, windows: windows, boundsByID: boundsByID, ccPID: ccPID, anchorX: anchorX)
+        publishRows(identified: identified)
+    }
+
+    /// Bento 主图标钉在「已识别第三方图标」的最右（未识别窗口不参与，避免贴到系统模块旁边）
+    private func pinMainIcon(identified: IdentifyResult, windows: [MBItemWindow],
+                             boundsByID: [CGWindowID: CGRect], ccPID: pid_t, anchorX: CGFloat?) {
+        guard let mainWindow = identified.mainIconWindow else { return }
+        let thirdParty = identified.icons.filter { !$0.isSystem }
+        // 只参照在屏的第三方图标（停在边界死区的离屏图标不作数）
+        let candidates = thirdParty.filter { $0.onscreen && (anchorX == nil || $0.bounds.midX > anchorX!) }
+        guard let rightmost = candidates.max(by: { $0.bounds.maxX < $1.bounds.maxX }) else { return }
+        if mainWindow.bounds.maxX < rightmost.bounds.maxX - 0.5 {
+            let liveBounds: (CGWindowID) -> CGRect? = { id in
+                self.menuBarWindows().first { $0.id == id }?.bounds
+            }
+            _ = MenuBarItemDrag.drag(mainWindow.id, to: CGPoint(x: rightmost.bounds.maxX + 4, y: 0),
+                                     targetPID: ccPID, boundsProvider: liveBounds)
+        }
+    }
+
+    private func publishRows(identified: IdentifyResult) {
+        var newRows: [Row] = []
+        var seen = Set<CGWindowID>()
+        for icon in identified.icons where !icon.isSystem {
+            seen.insert(icon.windowID)
+            newRows.append(Row(key: icon.key, name: icon.displayName,
+                               isHidden: hiddenKeys.contains(icon.key)))
+        }
+        // 已隐藏但本次没识别出来的（AX 位置失效）：靠记忆补上行，保证还能取消隐藏
+        for (windowID, info) in keyByWindowID
+        where hiddenKeys.contains(info.key) && !seen.contains(windowID) {
+            newRows.append(Row(key: info.key, name: info.name, isHidden: true))
+        }
+        newRows.sort { $0.name.localizedCompare($1.name) == .orderedAscending }
+        DispatchQueue.main.async {
+            self.rows = newRows
+            self.onRowsChanged?()
+        }
+    }
+
+    // MARK: hider 状态栏项（主线程）
+
+    private func createHider() {
+        guard hider == nil else { return }
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        item.button?.image = NSImage()
+        item.button?.setAccessibilityLabel("BentoHider")
+        hider = item
+        expandHider()
+    }
+
+    private func expandHider() {
+        guard let hider, !hiderExpanded else { return }
+        hider.length = 10000 // 巨宽 hider 把左侧图标挤出屏幕
+        hiderExpanded = true
+    }
+
+    private func removeHider() {
+        if let hider { NSStatusBar.system.removeStatusItem(hider) }
+        hider = nil
+        hiderExpanded = false
+    }
+
+    // MARK: 对外操作（主线程）
+
+    func setRowHidden(_ key: String, _ hidden: Bool) {
+        if hidden {
+            hiddenKeys.insert(key)
+            pendingShow.remove(key)
+        } else {
+            hiddenKeys.remove(key)
+            pendingShow.insert(key)
+        }
+        queue.async { self.enforce() }
+    }
+
+    func openManagerWindow() {
+        if let managerWindow {
+            managerWindow.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 380, height: 460),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered, defer: false
+        )
+        window.title = "菜单栏图标管理"
+        window.isReleasedWhenClosed = false
+        window.center()
+
+        let scroll = NSScrollView(frame: window.contentView!.bounds)
+        scroll.autoresizingMask = [.width, .height]
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .noBorder
+
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
+        scroll.documentView = stack
+        window.contentView = scroll
+        stackView = stack
+
+        onRowsChanged = { [weak self, weak window] in
+            guard let self, let window, window.isVisible else { return }
+            self.rebuildManagerList()
+        }
+        window.delegate = self
+        managerWindow = window
+        rebuildManagerList()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        // 打开时立刻刷新一次列表
+        queue.async { self.enforce() }
+    }
+
+    private func rebuildManagerList() {
+        guard let stackView else { return }
+        for v in stackView.arrangedSubviews { stackView.removeArrangedSubview(v); v.removeFromSuperview() }
+
+        let hint = NSTextField(wrappingLabelWithString: "勾选 = 显示，取消勾选 = 隐藏\n（系统图标请在 系统设置 → 控制中心 中管理）")
+        hint.font = NSFont.systemFont(ofSize: 11)
+        hint.textColor = .secondaryLabelColor
+        stackView.addArrangedSubview(hint)
+
+        if rows.isEmpty {
+            let empty = NSTextField(labelWithString: "未识别到第三方菜单栏图标")
+            empty.textColor = .secondaryLabelColor
+            stackView.addArrangedSubview(empty)
+        }
+        for row in rows {
+            let checkbox = NSButton(checkboxWithTitle: row.name, target: self, action: #selector(rowToggled(_:)))
+            checkbox.state = row.isHidden ? .off : .on
+            checkbox.identifier = NSUserInterfaceItemIdentifier(row.key)
+            stackView.addArrangedSubview(checkbox)
+        }
+    }
+
+    @objc private func rowToggled(_ sender: NSButton) {
+        guard let key = sender.identifier?.rawValue else { return }
+        setRowHidden(key, sender.state == .off)
+    }
+}
+
+extension MenuBarIconManager: NSWindowDelegate {
+    func windowWillClose(_ notification: Notification) {
+        managerWindow = nil
+        stackView = nil
+        onRowsChanged = nil
+    }
+}
+
 // MARK: - App Delegate
 
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -1775,6 +2338,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var tilingModifierControlItem: NSMenuItem!
     private var tilingPermissionMissing = false
     private var autoLaunchItem: NSMenuItem!
+    // 菜单栏图标管理
+    private let iconMgr = MenuBarIconManager()
     private var pollTimer: DispatchSourceTimer?
     private let pollQueue = DispatchQueue(label: "com.sz.bento.connection-poll")
     private var hasShownScrollPermissionAlert = false
@@ -1792,11 +2357,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         installAutoLaunchIfFirstRun()
         startScrollReverser(showAlert: true)
         startTiling()
+        iconMgr.start()
         startPollTimer()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         stopPollTimer()
+        iconMgr.stop()
         tiling.stop()
         scrollReverser.stop()
         screenCtl.restore()
@@ -1810,6 +2377,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupStatusBar() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.image = NSImage(systemSymbolName: "eye", accessibilityDescription: "Bento")
+        // 菜单栏图标管理功能靠这个 label 在 AXExtrasMenuBar 里认出自己的图标
+        statusItem.button?.setAccessibilityLabel("Bento")
 
         statusMenu = NSMenu()
 
@@ -1893,6 +2462,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let editLayoutsItem = NSMenuItem(title: "编辑分屏布局…", action: #selector(editTilingLayouts), keyEquivalent: "")
         editLayoutsItem.target = self
         statusMenu.addItem(editLayoutsItem)
+
+        statusMenu.addItem(.separator())
+
+        let manageIconsItem = NSMenuItem(title: "管理菜单栏图标…", action: #selector(openIconManager), keyEquivalent: "")
+        manageIconsItem.target = self
+        statusMenu.addItem(manageIconsItem)
 
         updateTilingMenuStates()
 
@@ -2149,6 +2724,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func editTilingLayouts() {
         tiling.openLayoutEditor()
+    }
+
+    @objc private func openIconManager() {
+        iconMgr.openManagerWindow()
     }
 
     @objc private func toggleAutoLaunch() {

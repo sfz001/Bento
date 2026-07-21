@@ -40,6 +40,15 @@ A single app for a grab-bag of small personal utilities. Currently: remote-conne
 - 配置按显示器 UUID 持久化到 `~/Library/Application Support/Bento/config.json`，重启/插拔显示器不丢布局
 - 需要授予「辅助功能」权限（未授权时菜单栏图标变为警告标志）
 
+#### 4. 菜单栏图标管理（类似 Bartender/Ice）
+
+- 菜单栏图标太多被刘海/系统挤掉时，可以**选择哪些显示、哪些隐藏**
+- 菜单「管理菜单栏图标…」弹出清单：勾选 = 显示，取消勾选 = 隐藏，即时生效并记住选择
+- Bento 自己的图标始终钉在第三方图标最右边，不会被挤掉
+- 退出 Bento 后所有被隐藏的图标自动恢复，不会遗留状态
+- 系统图标（时钟/电池/Wi-Fi 等）请在 系统设置 → 控制中心 中管理
+- 需要授予「辅助功能」权限
+
 ### 使用方法
 
 ```bash
@@ -90,6 +99,15 @@ open Bento.app
 - Layout = recursive binary-split tree; "编辑分屏布局…" opens a WYSIWYG full-screen editor overlay on every real display: click to select cells, drag dividers, right-click to split/merge, floating toolbar with reset/copy-to-all/save/cancel, Esc cancels anytime
 - Config persists per display UUID in `~/Library/Application Support/Bento/config.json` — survives reboots and display replugging
 - Requires Accessibility permission (the menu bar icon shows a warning badge while missing)
+
+#### 4. Menu bar icon manager (Bartender/Ice-style)
+
+- When menu bar icons overflow (notch), **choose which icons stay visible and which get hidden**
+- "管理菜单栏图标…" opens a checklist: checked = show, unchecked = hide — applies instantly and persists
+- Bento's own icon is always pinned rightmost among third-party icons and never gets pushed out
+- Quitting Bento restores all hidden icons — nothing is left behind
+- System icons (clock/battery/Wi-Fi) are managed in System Settings → Control Center
+- Requires Accessibility permission
 
 ### Usage
 
