@@ -42,6 +42,8 @@ class MenuBarIconManager: NSObject {
     private var timer: Timer?
     private var managerWindow: NSWindow?
     private var tableView: NSTableView?
+    private var emptyView: NSView?
+    private var footnoteLabel: NSTextField?
 
     /// 持久化的隐藏键集合
     private var hiddenKeys: Set<String> = {
@@ -574,6 +576,7 @@ class MenuBarIconManager: NSObject {
         )
         window.title = "菜单栏图标管理"
         window.isReleasedWhenClosed = false
+        window.minSize = NSSize(width: 360, height: 320)
         window.center()
 
         // 普通窗口没有双行标题，提示放窗口内顶部
@@ -585,7 +588,7 @@ class MenuBarIconManager: NSObject {
 
         let table = NSTableView()
         table.headerView = nil
-        table.rowHeight = 36
+        table.rowHeight = 44 // 双行（名称 + 副标题）
         table.style = .inset
         table.selectionHighlightStyle = .none
         table.allowsMultipleSelection = false
@@ -606,11 +609,12 @@ class MenuBarIconManager: NSObject {
         scroll.drawsBackground = false
         scroll.translatesAutoresizingMaskIntoConstraints = false
 
-        // 底部脚注 + 逃生舱按钮
-        let footnote = NSTextField(wrappingLabelWithString: "时钟与控制中心由系统固定 · Bento 本尊不可隐藏")
+        // 底部脚注（动态统计 + 固定说明）+ 逃生舱按钮
+        let footnote = NSTextField(wrappingLabelWithString: "")
         footnote.font = NSFont.systemFont(ofSize: 10)
         footnote.textColor = .tertiaryLabelColor
         footnote.translatesAutoresizingMaskIntoConstraints = false
+        footnoteLabel = footnote
 
         let showAll = NSButton(title: "全部恢复显示", target: self, action: #selector(showAllRows))
         showAll.bezelStyle = .rounded
@@ -623,6 +627,25 @@ class MenuBarIconManager: NSObject {
         content.addSubview(scroll)
         content.addSubview(footnote)
         content.addSubview(showAll)
+
+        // 空态：图标 + 两行说明，一个图标都没识别到时不至于一片空白
+        let emptyIcon = NSImageView(image: NSImage(systemSymbolName: "app.dashed", accessibilityDescription: nil)!)
+        emptyIcon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 30, weight: .light)
+        emptyIcon.contentTintColor = .tertiaryLabelColor
+        let emptyTitle = NSTextField(labelWithString: "未识别到菜单栏图标")
+        emptyTitle.font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        emptyTitle.textColor = .secondaryLabelColor
+        let emptySub = NSTextField(labelWithString: "第三方 App 的菜单栏图标会出现在这里")
+        emptySub.font = NSFont.systemFont(ofSize: 11)
+        emptySub.textColor = .tertiaryLabelColor
+        let emptyStack = NSStackView(views: [emptyIcon, emptyTitle, emptySub])
+        emptyStack.orientation = .vertical
+        emptyStack.alignment = .centerX
+        emptyStack.spacing = 6
+        emptyStack.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(emptyStack)
+        emptyView = emptyStack
+
         NSLayoutConstraint.activate([
             hint.topAnchor.constraint(equalTo: content.topAnchor, constant: 10),
             hint.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
@@ -636,20 +659,41 @@ class MenuBarIconManager: NSObject {
             footnote.trailingAnchor.constraint(lessThanOrEqualTo: showAll.leadingAnchor, constant: -12),
             showAll.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
             showAll.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12),
+            emptyStack.centerXAnchor.constraint(equalTo: scroll.centerXAnchor),
+            emptyStack.centerYAnchor.constraint(equalTo: scroll.centerYAnchor),
         ])
         window.contentView = content
 
         onRowsChanged = { [weak self, weak window] in
             guard let self, let window, window.isVisible else { return }
+            self.emptyView?.isHidden = !self.rows.isEmpty
+            self.updateFootnote()
             self.tableView?.reloadData()
         }
         window.delegate = self
         managerWindow = window
+        emptyStack.isHidden = !rows.isEmpty
+        updateFootnote()
         table.reloadData()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         // 打开时立刻刷新一次列表
         queue.async { self.enforce(force: true) }
+    }
+
+    /// 底部脚注：动态统计 + 固定说明（主线程）
+    private func updateFootnote() {
+        let hiddenCount = rows.filter { $0.isHidden }.count
+        footnoteLabel?.stringValue = rows.isEmpty
+            ? "时钟与控制中心由系统固定 · Bento 本尊不可隐藏"
+            : "共 \(rows.count) 项 · \(hiddenCount) 已隐藏\n时钟与控制中心由系统固定 · Bento 本尊不可隐藏"
+    }
+
+    /// 行副标题：模块/本尊给类型说明，第三方给 bundleID（名字以外的稳定识别信息）
+    private func rowSubtitle(for key: String) -> String {
+        if key == "bento:main" { return "Bento 本尊 · 不可隐藏" }
+        if key.hasPrefix("module:") { return "系统模块" }
+        return String(key.split(separator: "|").first ?? "")
     }
 
     /// 行图标：第三方用应用图标，系统模块/本尊用 SF Symbol。
@@ -715,6 +759,7 @@ extension MenuBarIconManager: NSTableViewDataSource, NSTableViewDelegate {
 
         let iconView = NSImageView()
         iconView.image = rowIcon(for: r.key)
+        iconView.alphaValue = r.isHidden ? 0.45 : 1.0 // 隐藏行图标同步压暗
         if r.key.hasPrefix("module:") || r.key == "bento:main" {
             iconView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
             iconView.contentTintColor = .secondaryLabelColor
@@ -723,12 +768,19 @@ extension MenuBarIconManager: NSTableViewDataSource, NSTableViewDelegate {
         iconView.translatesAutoresizingMaskIntoConstraints = false
         cell.addSubview(iconView)
 
-        let label = NSTextField(labelWithString: r.name)
-        label.font = NSFont.systemFont(ofSize: 13)
-        label.textColor = r.isHidden ? .secondaryLabelColor : .labelColor
-        label.lineBreakMode = .byTruncatingTail
-        label.translatesAutoresizingMaskIntoConstraints = false
-        cell.addSubview(label)
+        let nameLabel = NSTextField(labelWithString: r.name)
+        nameLabel.font = NSFont.systemFont(ofSize: 13)
+        nameLabel.textColor = r.isHidden ? .secondaryLabelColor : .labelColor
+        nameLabel.lineBreakMode = .byTruncatingTail
+        nameLabel.translatesAutoresizingMaskIntoConstraints = false
+        cell.addSubview(nameLabel)
+
+        let subLabel = NSTextField(labelWithString: rowSubtitle(for: r.key))
+        subLabel.font = NSFont.systemFont(ofSize: 11)
+        subLabel.textColor = .tertiaryLabelColor
+        subLabel.lineBreakMode = .byTruncatingTail
+        subLabel.translatesAutoresizingMaskIntoConstraints = false
+        cell.addSubview(subLabel)
 
         let toggle = NSSwitch()
         toggle.controlSize = .small
@@ -751,9 +803,12 @@ extension MenuBarIconManager: NSTableViewDataSource, NSTableViewDelegate {
             iconView.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
             iconView.widthAnchor.constraint(equalToConstant: 22),
             iconView.heightAnchor.constraint(equalToConstant: 22),
-            label.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 9),
-            label.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-            label.trailingAnchor.constraint(lessThanOrEqualTo: toggle.leadingAnchor, constant: -10),
+            nameLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 9),
+            nameLabel.bottomAnchor.constraint(equalTo: cell.centerYAnchor, constant: -1),
+            nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: toggle.leadingAnchor, constant: -10),
+            subLabel.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
+            subLabel.topAnchor.constraint(equalTo: cell.centerYAnchor, constant: 1),
+            subLabel.trailingAnchor.constraint(lessThanOrEqualTo: toggle.leadingAnchor, constant: -10),
             toggle.trailingAnchor.constraint(equalTo: grip.leadingAnchor, constant: -12),
             toggle.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
             grip.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -10),
@@ -798,6 +853,8 @@ extension MenuBarIconManager: NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         managerWindow = nil
         tableView = nil
+        emptyView = nil
+        footnoteLabel = nil
         onRowsChanged = nil
     }
 }

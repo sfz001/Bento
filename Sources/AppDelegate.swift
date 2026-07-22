@@ -234,6 +234,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             statusMenuItem.image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: nil)
             statusItem.button?.image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: "Bento 需要辅助功能权限")
             statusItem.button?.title = ""
+            statusItem.button?.toolTip = "Bento 需要辅助功能权限"
             return
         }
         if !remoteMonitorEnabled {
@@ -241,18 +242,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             statusMenuItem.image = NSImage(systemSymbolName: "pause.circle", accessibilityDescription: nil)
             statusItem.button?.image = NSImage(systemSymbolName: "eye", accessibilityDescription: nil)
             statusItem.button?.title = ""
+            statusItem.button?.toolTip = "远程熄屏监控已停用"
             return
         }
         if screenCtl.isScreenBlack {
             statusMenuItem.title = "远程已连接 · 已熄屏"
             statusMenuItem.image = NSImage(systemSymbolName: "eye.slash.fill", accessibilityDescription: nil)
             statusItem.button?.image = NSImage(systemSymbolName: "eye.slash.fill", accessibilityDescription: nil)
-            statusItem.button?.title = " 已熄屏"
+            // 熄屏态只换图标不加文字：菜单栏空间是稀缺资源（尤其拥挤栏），语义放 tooltip
+            statusItem.button?.title = ""
+            statusItem.button?.toolTip = "远程已连接 · 已熄屏"
         } else {
             statusMenuItem.title = "监控中"
             statusMenuItem.image = NSImage(systemSymbolName: "checkmark.circle", accessibilityDescription: nil)
             statusItem.button?.image = NSImage(systemSymbolName: "eye", accessibilityDescription: nil)
             statusItem.button?.title = ""
+            statusItem.button?.toolTip = "Bento"
         }
     }
 
