@@ -2,9 +2,9 @@
 
 > 个人 macOS 菜单栏工具箱 / Personal macOS menu bar toolkit
 
-一个 app 装一堆个人需要的小功能。当前包含：远程连接自动熄屏、鼠标/触控板独立滚动方向控制。
+一个 app 装一堆个人需要的小功能。当前包含：远程连接自动熄屏、鼠标/触控板独立滚动方向控制、分屏（窗口吸附）、菜单栏图标管理。
 
-A single app for a grab-bag of small personal utilities. Currently: remote-connection auto screen-off, and Mos-style independent scroll-direction control for mouse vs trackpad.
+A single app for a grab-bag of small personal utilities. Currently: remote-connection auto screen-off, Mos-style independent scroll-direction control, MaxTo-style window tiling, and a Bartender-style menu bar icon manager.
 
 ---
 
@@ -43,12 +43,13 @@ A single app for a grab-bag of small personal utilities. Currently: remote-conne
 
 #### 4. 菜单栏图标管理（类似 Bartender/Ice）
 
-- 菜单栏图标太多被刘海/系统挤掉时，可以**选择哪些显示、哪些隐藏**
+- 菜单栏图标太多被刘海/系统挤掉时，可以**选择哪些显示、哪些隐藏**（隐藏 = 收进系统「«」溢出区，点 « 仍可临时查看和使用）
 - 菜单「管理菜单栏图标…」弹出清单：勾选 = 显示，取消勾选 = 隐藏，即时生效并记住选择
-- 清单里的 **← / →** 按钮可以调整图标在菜单栏里的左右顺序，顺序持久保存
-- Bento 自己的图标始终钉在第三方图标最右边，不会被挤掉
-- 退出 Bento 后所有被隐藏的图标自动恢复，不会遗留状态
-- 系统图标（时钟/电池/Wi-Fi 等）请在 系统设置 → 控制中心 中管理
+- **拖动清单行**即可调整图标在菜单栏里的左右顺序（上 = 菜单栏左），顺序持久保存
+- 电池 / Wi-Fi / 用户切换等系统模块也在清单里，同样可隐藏、可排序；时钟与控制中心被系统固定，无法管理
+- Bento 自己的图标作为一行参与排序，但不可隐藏
+- 原理：直接改写 macOS 27 菜单栏（MenuBarAgent）的位置偏好字典，不用任何合成点击/拖拽；因此**需要 macOS 27+**
+- 局限：macOS 27 没有强制隐藏的原语，菜单栏空间充裕时被隐藏的图标可能重新出现（拥挤时稳定）
 - 需要授予「辅助功能」权限
 
 ### 使用方法
@@ -61,11 +62,11 @@ open Bento.app
 1. 启动后菜单栏出现眼睛图标
 2. 首次启动会请求权限（用于滚动方向控制）。在「系统设置 → 隐私与安全性」里确认 Bento 已允许「辅助功能」和「输入监控」，**然后退出 app 重开**
 3. 开机自启已自动配置，无需操作
-4. 点击菜单栏图标可看状态、切换滚动反转开关、退出
+4. 点击菜单栏图标可看状态、切换各功能开关、编辑分屏布局、管理菜单栏图标、退出
 
 ### 系统要求
 
-- macOS 14.0 (Sonoma) 或更高版本
+- macOS 14.0 (Sonoma) 或更高版本；菜单栏图标管理需要 macOS 27+
 - 远程熄屏功能需要 RustDesk 或开启 macOS 屏幕共享
 
 ---
@@ -105,11 +106,13 @@ open Bento.app
 
 #### 4. Menu bar icon manager (Bartender/Ice-style)
 
-- When menu bar icons overflow (notch), **choose which icons stay visible and which get hidden**
+- When menu bar icons overflow (notch), **choose which icons stay visible and which get hidden** (hidden = tucked into the system "«" overflow section — click « to peek at and use them anytime)
 - "管理菜单栏图标…" opens a checklist: checked = show, unchecked = hide — applies instantly and persists
-- Bento's own icon is always pinned rightmost among third-party icons and never gets pushed out
-- Quitting Bento restores all hidden icons — nothing is left behind
-- System icons (clock/battery/Wi-Fi) are managed in System Settings → Control Center
+- **Drag rows** to reorder icons in the menu bar (top = leftmost); order persists
+- Movable system modules (Battery / Wi-Fi / User Switching) are listed and manageable too; Clock and Control Center are pinned by the system
+- Bento's own icon appears as a row for ordering but cannot be hidden
+- Works by rewriting the macOS 27 menu bar (MenuBarAgent) position-preference dict — no synthetic clicks or drags; therefore **requires macOS 27+**
+- Limitation: macOS 27 has no forced-hide primitive, so hidden icons can reappear when the bar has plenty of free space (stable on a crowded bar)
 - Requires Accessibility permission
 
 ### Usage
@@ -122,9 +125,9 @@ open Bento.app
 1. An eye icon appears in the menu bar
 2. On first launch you'll be prompted for permissions used by the scroll reverser. Confirm Bento is allowed under System Settings → Privacy & Security → Accessibility and Input Monitoring, **then quit and relaunch the app**
 3. Launch-at-login is configured automatically
-4. Click the menu bar icon to see status, toggle scroll reversal, or quit
+4. Click the menu bar icon to see status, toggle features, edit tiling layouts, manage menu bar icons, or quit
 
 ### Requirements
 
-- macOS 14.0 (Sonoma) or later
+- macOS 14.0 (Sonoma) or later; the menu bar icon manager requires macOS 27+
 - Remote screen-off feature requires RustDesk or macOS Screen Sharing

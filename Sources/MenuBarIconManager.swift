@@ -12,17 +12,19 @@ import IOKit
 //   （正规签名 App 用 bundleID，ad-hoc/无签名用可执行名，故自家条目两种前缀都写），
 //   值 = 距右缘的偏好位置，越大越靠左。外部改写该字典 0.5s 内实时生效（cfprefsd
 //   通知），无需重启 agent、无需任何合成事件。
-// - 系统布局算法：按 position 从小到大自右向左累计排布，遇到第一个放不下的项，
-//   该项连同其左侧（position 更大）的所有项整体折叠进「«」溢出区（chevron 点击展开）。
-// - 隐藏 = 借系统溢出规则：hider 是一个 10000pt 宽的状态栏项，position 卡在可见区
-//   与隐藏区之间——它永远放不下 → 自身折叠，同时永远挡住 position 比它大的项，
-//   与剩余空间无关，隐藏稳定。Bento 退出时 hider 消失，隐藏图标回到系统溢出区
-//   （chevron 仍可访问），天然兜底。注意 hider 在场时 chevron 展开可能不可用。
-// - 显示/排序/钉位：全部通过位置赋值完成。用户手动 ⌘ 拖拽会被 agent 写回字典，
-//   每轮按位置阈值把结果采纳回 hiddenKeys/iconOrder（不与用户对抗）；只在语义
-//   不一致（该隐没隐、顺序不对、条目缺失）时才回写字典，避免与 agent 互写打架。
-// - 身份仍走各 App 的 AXExtrasMenuBar（title/desc），持久化键沿用 bundleID|序号。
-// - 系统模块（module:* 命名空间：时钟/电池/WiFi…）不纳入管理，由系统设置管理。
+// - 系统布局算法 = 贪心跳洞：按 position 从小到大自右向左排布，放不下的项跳进
+//   「«」溢出区（chevron 点击展开），然后继续排后面的。没有"截断"——超宽项只会
+//   自己被跳过，挡不住任何人（10000pt hider 方案在 27 上无效，已删除）。
+// - 隐藏 = 赋一个比所有可见项都大的 position（隐藏区 1100+）：拥挤的菜单栏
+//   （刘海 + 行情条这类宽图标）放不下最左侧的它们 → 稳定折叠进溢出区。
+//   局限：空间充裕时隐藏项会重新可见（27 上没有强制隐藏的原语）。
+// - 警惕：agent 会在状态项注册/注销等扰动后用自己算出的"实际距离"整体重写字典
+//   （含溢出/展开态下的瞬态坐标），所以字典数值绝不能当成用户的隐藏意图来采纳
+//   ——隐藏/显示意图只来自本管理器的 UI；字典只用来采纳"可见项的左右顺序"
+//   （实际值忠实反映真实排列，无害）。语义不一致（该隐没隐/顺序不对/条目缺失）
+//   时下一轮回写纠正即可自愈，数值上的漂移不管，避免与 agent 互写打架。
+// - 身份仍走各 App 的 AXExtrasMenuBar（title/desc），持久化键沿用 bundleID|序号；
+//   系统模块经 module:* 条目管理（时钟/控制中心被系统钉死，除外）。
 
 private let mbaPrefDomain = "com.apple.MenuBarAgent" as CFString
 private let mbaPositionsKey = "TrailingItemPreferredPositions" as CFString
@@ -39,7 +41,6 @@ class MenuBarIconManager: NSObject {
 
     private let queue = DispatchQueue(label: "com.sz.bento.iconmgr")
     private var timer: Timer?
-    private var hider: NSStatusItem?
     private var managerWindow: NSWindow?
     private var tableView: NSTableView?
 
@@ -58,12 +59,8 @@ class MenuBarIconManager: NSObject {
     private var iconNames: [String: String] = (UserDefaults.standard.dictionary(forKey: "MenuBarIconNames") as? [String: String]) ?? [:] {
         didSet { UserDefaults.standard.set(iconNames, forKey: "MenuBarIconNames") }
     }
-    /// 首轮按持久化意图落一次位置；之后 agent 字典里的实际位置是事实来源（采纳用户手动拖拽）
-    private var hasAppliedOnce = false
-    /// UI 操作触发的一轮 enforce 跳过采纳（别把用户刚改的意图又用旧位置覆盖回去）
+    /// UI 操作触发的一轮 enforce 跳过顺序采纳（别把用户刚拖好的顺序又用旧位置覆盖回去）
     private var suppressAdoptionOnce = false
-    /// 上次写给 agent 的各条目值：现值偏离它才视为“用户动过”（agent 可能保留我们没写的旧条目）
-    private var lastWritten: [String: Double] = [:]
     /// 变更检测：agent 字典 + 运行中 App 集合的签名；没变且未超兜底间隔就跳过 AX 枚举（重活）
     private var lastSignature = 0
     private var lastFullPass = Date.distantPast
@@ -87,8 +84,6 @@ class MenuBarIconManager: NSObject {
     func stop() {
         timer?.invalidate()
         timer = nil
-        if let hider { NSStatusBar.system.removeStatusItem(hider) }
-        hider = nil
     }
 
     // MARK: agent 字典读写（后台线程）
@@ -248,15 +243,12 @@ class MenuBarIconManager: NSObject {
         return out
     }
 
-    /// 图标当前生效位置：优先取被 agent（用户拖拽）改过的条目值，否则任一现值
+    /// 图标当前生效位置：条目键的任一现值
     private func currentPos(of item: LiveItem, in positions: [String: Double]) -> Double? {
-        var any: Double?
         for k in item.entryKeys {
-            guard let v = positions[k] else { continue }
-            if any == nil { any = v }
-            if let w = lastWritten[k], abs(v - w) > 1 { return v }
+            if let v = positions[k] { return v }
         }
-        return any
+        return nil
     }
 
     // MARK: 状态纠正（每 3s，后台线程）
@@ -289,31 +281,22 @@ class MenuBarIconManager: NSObject {
         let byKey = Dictionary(uniqueKeysWithValues: items.map { ($0.key, $0) })
         if hiddenKeys.contains("bento:main") { hiddenKeys.remove("bento:main") }
 
-        // —— 布局参数（数值只有相对意义）：统一网格 base+8i 覆盖第三方与系统模块，
-        //    hider 卡在网格与隐藏区之间。被钉死的模块（时钟/控制中心）无视这一切 ——
+        // —— 布局参数（数值只有相对意义）：统一网格 base+8i 覆盖第三方与系统模块；
+        //    隐藏区远大于可见区，靠拥挤的菜单栏放不下它们实现折叠。
+        //    被钉死的模块（时钟/控制中心）无视这一切 ——
         let base = 100.0
-        let hiderPos = 1000.0               // hider：卡在可见区与隐藏区之间
         let hiddenBase = 1100.0             // 隐藏区起点
-        let hiddenThreshold = 1050.0        // 位置超过它视为“已隐藏”
+        let hiddenThreshold = 1050.0        // 隐藏区判定线（仅用于语义校验，不用于采纳意图）
 
-        // —— 采纳：agent 字典里的实际位置是事实来源（用户可能手动 ⌘ 拖拽过）——
-        // UI 操作触发的一轮跳过（别把用户刚改的意图又用旧位置覆盖回去）
+        // —— 采纳（只采纳顺序，绝不采纳隐藏状态）：agent 会在状态项注册/注销后
+        // 用瞬态实际坐标整体重写字典，位置数值不能当隐藏意图；隐藏/显示只听 UI。
+        // 顺序采纳每轮必做（含启动首轮）：菜单栏实际排列是顺序的事实来源，
+        // 决不能反过来用陈旧的持久化顺序去重排用户的菜单栏。
+        // UI 操作触发的一轮跳过（别把用户刚拖好的顺序又用旧位置覆盖回去）
         let placed: [(key: String, pos: Double)] = items.compactMap { it in
             currentPos(of: it, in: positions).map { (it.key, $0) }
         }
         if !skipAdoption {
-            // 隐藏状态采纳：仅在已落过位且 hider 在场时（否则谈不上“隐藏”语义；
-            // 启动首轮 hider 还没建，全按持久化意图，防止把重启前隐藏的当成“用户显示了”）
-            if hasAppliedOnce, hider != nil {
-                var newHidden = hiddenKeys
-                for (key, pos) in placed where key != "bento:main" {
-                    if pos > hiddenThreshold { newHidden.insert(key) }
-                    else { newHidden.remove(key) }
-                }
-                if newHidden != hiddenKeys { hiddenKeys = newHidden }
-            }
-            // 顺序采纳每轮必做（含启动首轮）：菜单栏实际排列是顺序的事实来源，
-            // 决不能反过来用陈旧的持久化顺序去重排用户的菜单栏。
             // 可见图标按位置降序 = 左→右；只重排 iconOrder 中这些键的相对顺序
             let newVisibleOrder = placed.filter { !hiddenKeys.contains($0.key) }
                 .sorted { $0.pos > $1.pos }.map(\.key)
@@ -343,7 +326,6 @@ class MenuBarIconManager: NSObject {
         for item in items where iconNames[item.key] != item.displayName { iconNames[item.key] = item.displayName }
 
         let present = Set(items.map(\.key))
-        let needHider = !hiddenKeys.isEmpty
         let visibleList = iconOrder.filter { present.contains($0) && !hiddenKeys.contains($0) }
         let hiddenList = iconOrder.filter { present.contains($0) && hiddenKeys.contains($0) }
 
@@ -355,7 +337,6 @@ class MenuBarIconManager: NSObject {
         for (j, key) in hiddenList.reversed().enumerated() {
             desired.append((byKey[key]!.entryKeys, hiddenBase + Double(j) * 8))
         }
-        if needHider { desired.append((ownEntryKeys("BentoHider"), hiderPos)) }
 
         // —— 语义校验：只在“该隐没隐/该显没显/顺序不对/条目缺失/没钉住”时才回写，
         //    数值上的细微差异不管（agent 可能改写数值，逐字节强求会互写打架）。
@@ -375,10 +356,6 @@ class MenuBarIconManager: NSObject {
         if currentVisibleOrder != visibleList.filter({ k in
             currentPos(of: byKey[k]!, in: positions) != nil
         }) { writeNeeded = true }
-        if needHider {
-            let hp = ownEntryKeys("BentoHider").compactMap { positions[$0] }.first
-            if hp == nil || abs(hp! - hiderPos) > 200 { writeNeeded = true }
-        }
 
         var finalPositions = positions
         if writeNeeded {
@@ -386,27 +363,21 @@ class MenuBarIconManager: NSObject {
                 for k in entry.keys {
                     raw[k] = entry.pos
                     finalPositions[k] = entry.pos
-                    lastWritten[k] = entry.pos
                 }
             }
-            // 清掉改用显式 autosaveName（BentoMain/BentoHider）之前的旧条目
-            for legacy in ["status:Bento::Item-0", "status:Bento::Item-1"] {
+            // 清掉历史方案的旧条目（默认 autosaveName 时代 + 已废弃的 hider）
+            for legacy in ["status:Bento::Item-0", "status:Bento::Item-1",
+                           "status:Bento::BentoHider", "status:com.sz.bento::BentoHider"] {
                 raw.removeValue(forKey: legacy)
                 finalPositions.removeValue(forKey: legacy)
             }
             writeRawPositions(raw)
         }
-        hasAppliedOnce = true
         // 签名以回写后的字典为准，别把自己的写入当成下一轮的外部变化
         var finalHasher = Hasher()
         finalHasher.combine(finalPositions)
         finalHasher.combine(runningIDs)
         lastSignature = finalHasher.finalize()
-
-        // —— hider 生命周期（主线程）——
-        if needHider != (hider != nil) {
-            DispatchQueue.main.async { needHider ? self.createHider() : self.removeHider() }
-        }
 
         // UI 操作后若溢出区正处于展开态（»），主动收起，让用户立刻看到隐藏结果；
         // 否则展开条会把刚隐藏的图标继续显示最长约一分钟（自动收起前），像是隐藏没生效
@@ -474,24 +445,6 @@ class MenuBarIconManager: NSObject {
             self.rows = newRows
             self.onRowsChanged?()
         }
-    }
-
-    // MARK: hider 状态栏项（主线程）
-
-    private func createHider() {
-        guard hider == nil else { return }
-        // 10000pt 永远放不下 → 自身折叠进溢出区（不占可见空间），
-        // 同时按“遇阻整体截断”规则挡住所有 position 比它大的隐藏项
-        let item = NSStatusBar.system.statusItem(withLength: 10000)
-        item.autosaveName = "BentoHider"
-        item.button?.image = NSImage()
-        item.button?.setAccessibilityLabel("BentoHider")
-        hider = item
-    }
-
-    private func removeHider() {
-        if let hider { NSStatusBar.system.removeStatusItem(hider) }
-        hider = nil
     }
 
     // MARK: 对外操作（主线程）
