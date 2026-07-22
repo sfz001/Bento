@@ -1,7 +1,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
-import IOKit
+import ServiceManagement
 
 // MARK: - App Delegate
 
@@ -10,7 +10,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusMenu: NSMenu!
     private var statusMenuItem: NSMenuItem!
 
-    private var restoreDisplaysItem: NSMenuItem!
     private let screenCtl = ScreenController()
     private let scrollReverser = ScrollReverser()
     private var remoteMonitorEnabled = UserDefaults.standard.object(forKey: "RemoteMonitorEnabled") as? Bool ?? true
@@ -37,14 +36,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var hasShownScrollPermissionAlert = false
 
     private let launchAgentLabel = "com.sz.bento"
-    private let legacyLaunchAgentLabel = "com.rustdesk.screen-off"
     private var launchAgentPath: String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         return "\(home)/Library/LaunchAgents/\(launchAgentLabel).plist"
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        migrateLegacyLaunchAgent()
         setupStatusBar()
         installAutoLaunchIfFirstRun()
         startScrollReverser(showAlert: true)
@@ -96,8 +93,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusMenu.addItem(remoteMonitorItem)
 
         // 熄屏模块的手动兜底：把镜像强制拆回扩展桌面（自动恢复失灵时用）
-        restoreDisplaysItem = makeItem("恢复扩展显示器", symbol: "display.2", action: #selector(restoreExtendedDisplays))
-        statusMenu.addItem(restoreDisplaysItem)
+        statusMenu.addItem(makeItem("恢复扩展显示器", symbol: "display.2", action: #selector(restoreExtendedDisplays)))
 
         // 远程场景配件：认证重启，跳过 FileVault 开机解锁界面，重启后远程还能连回来
         statusMenu.addItem(makeItem("FileVault 免密重启", symbol: "lock.rotation", action: #selector(authRestart)))
@@ -153,7 +149,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusMenu.addItem(.separator())
 
         autoLaunchItem = makeItem("开机自启", symbol: "power", action: #selector(toggleAutoLaunch))
-        autoLaunchItem.state = FileManager.default.fileExists(atPath: launchAgentPath) ? .on : .off
+        autoLaunchItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         statusMenu.addItem(autoLaunchItem)
 
         statusMenu.addItem(makeItem("退出 Bento", symbol: nil, action: #selector(quitApp), key: "q"))
@@ -415,48 +411,45 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleAutoLaunch() {
+        do {
+            if SMAppService.mainApp.status == .enabled {
+                try SMAppService.mainApp.unregister()
+            } else {
+                try SMAppService.mainApp.register()
+            }
+        } catch {
+            ErrorLog.log("开机自启切换失败: \(error.localizedDescription)")
+        }
+        autoLaunchItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+    }
+
+    // MARK: - Auto Launch (SMAppService)
+
+    /// 首次启动默认开启自启；之后完全由菜单开关决定，不覆盖用户选择。
+    /// 顺带做一次性迁移：老版手写 LaunchAgent plist + launchctl → 官方 SMAppService
+    /// （与 系统设置 → 通用 → 登录项 集成）。
+    private func installAutoLaunchIfFirstRun() {
         if FileManager.default.fileExists(atPath: launchAgentPath) {
             runProcess("/bin/launchctl", ["unload", launchAgentPath])
             try? FileManager.default.removeItem(atPath: launchAgentPath)
-        } else {
-            installAutoLaunch()
+            register(reason: "LaunchAgent 迁移")
         }
-        autoLaunchItem.state = FileManager.default.fileExists(atPath: launchAgentPath) ? .on : .off
-    }
-
-    // MARK: - Auto Launch
-
-    /// 首次启动默认开启自启；之后完全由菜单开关决定，不覆盖用户选择
-    private func installAutoLaunchIfFirstRun() {
         let key = "LaunchAtLoginConfigured"
-        guard !UserDefaults.standard.bool(forKey: key) else { return }
-        UserDefaults.standard.set(true, forKey: key)
-        installAutoLaunch()
+        if !UserDefaults.standard.bool(forKey: key) {
+            UserDefaults.standard.set(true, forKey: key)
+            register(reason: "首次启动")
+        }
+        autoLaunchItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
     }
 
-    private func installAutoLaunch() {
-        let plist: [String: Any] = [
-            "Label": launchAgentLabel,
-            "ProgramArguments": ["/usr/bin/open", "-a", Bundle.main.bundlePath],
-            "RunAtLoad": true,
-        ]
-        guard let data = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0) else { return }
-        let url = URL(fileURLWithPath: launchAgentPath)
-        if let existing = try? Data(contentsOf: url), existing == data { return }
-        try? data.write(to: url)
-    }
-
-    /// One-time cleanup: remove the LaunchAgent from the previous app name
-    /// (`com.rustdesk.screen-off`) so reboots don't auto-launch the old binary
-    /// alongside Bento. No-op if the legacy plist is already gone.
-    private func migrateLegacyLaunchAgent() {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let oldPath = "\(home)/Library/LaunchAgents/\(legacyLaunchAgentLabel).plist"
-        guard FileManager.default.fileExists(atPath: oldPath) else { return }
-
-        runProcess("/bin/launchctl", ["unload", oldPath])
-        try? FileManager.default.removeItem(atPath: oldPath)
-        NSLog("Migration: removed legacy LaunchAgent \(legacyLaunchAgentLabel)")
+    private func register(reason: String) {
+        guard SMAppService.mainApp.status != .enabled else { return }
+        do {
+            try SMAppService.mainApp.register()
+            NSLog("开机自启已注册（\(reason)）")
+        } catch {
+            ErrorLog.log("开机自启注册失败（\(reason)）: \(error.localizedDescription)")
+        }
     }
 
 }
