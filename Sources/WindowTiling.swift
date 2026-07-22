@@ -444,9 +444,16 @@ private class GridOverlayWindow: NSWindow {
 private class EditorView: NSView {
     weak var session: LayoutEditorSession?
     var screenUUID = ""
-    var layout: LayoutNode = .cell { didSet { needsDisplay = true } }
+    var layout: LayoutNode = .cell {
+        didSet {
+            needsDisplay = true
+            window?.invalidateCursorRects(for: self)
+        }
+    }
     var selectedPath: [Int]? { didSet { needsDisplay = true } }
     private var dragging: (path: [Int], parentRect: CGRect, dir: SplitDir)?
+    /// 鼠标悬停的分隔线（2px accent 高亮 + 光标变形，提示"这条线能拖"）
+    private var hoveredLinePath: [Int]? { didSet { needsDisplay = true } }
 
     /// 绘制/命中统一使用的内容区（留 2px 边，贴边线才画得出）
     private var contentRect: CGRect { bounds.insetBy(dx: 2, dy: 2) }
@@ -455,23 +462,59 @@ private class EditorView: NSView {
         NSColor.black.withAlphaComponent(0.35).setFill()
         bounds.fill()
         for (path, rect) in layout.cellRects(in: contentRect) {
-            if path == selectedPath {
+            let selected = path == selectedPath
+            if selected {
                 NSColor.controlAccentColor.withAlphaComponent(0.35).setFill()
                 NSBezierPath(rect: rect).fill()
             }
-            NSColor.white.withAlphaComponent(0.6).setStroke()
+            // 选中格 accent 描边，和其他格一眼区分开
+            (selected ? NSColor.controlAccentColor : NSColor.white.withAlphaComponent(0.6)).setStroke()
             let outline = NSBezierPath(rect: rect.insetBy(dx: 0.5, dy: 0.5))
-            outline.lineWidth = 1
+            outline.lineWidth = selected ? 2 : 1
             outline.stroke()
         }
-        let hint = "点击选中格子 · 拖动分隔线调比例 · 右键分割/合并 · Esc 取消"
+        // 悬停/拖拽中的分隔线高亮
+        let activeLinePath = dragging?.path ?? hoveredLinePath
+        for line in layout.splitLines(in: contentRect) where line.path == activeLinePath {
+            NSColor.controlAccentColor.setStroke()
+            let highlight = NSBezierPath(rect: line.line.insetBy(dx: -1, dy: -1))
+            highlight.lineWidth = 2
+            highlight.stroke()
+        }
+        let hint = "点击选中格子 · 拖动分隔线调比例 · 右键分割/合并 · Esc 取消 · ⏎ 保存"
         let attrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 13, weight: .medium),
-            .foregroundColor: NSColor.white.withAlphaComponent(0.85),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.92),
         ]
         let size = hint.size(withAttributes: attrs)
-        hint.draw(at: NSPoint(x: (bounds.width - size.width) / 2, y: bounds.height - size.height - 12),
-                  withAttributes: attrs)
+        // 提示文字垫一个圆角胶囊底，亮壁纸下也可读；放底部（顶部是工具条的地盘）
+        let pill = NSRect(x: (bounds.width - size.width) / 2 - 12, y: 24,
+                          width: size.width + 24, height: size.height + 14)
+        NSColor.black.withAlphaComponent(0.55).setFill()
+        NSBezierPath(roundedRect: pill, xRadius: pill.height / 2, yRadius: pill.height / 2).fill()
+        hint.draw(at: NSPoint(x: pill.minX + 12, y: pill.minY + 7), withAttributes: attrs)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseMoved, .activeAlways, .inVisibleRect],
+                                       owner: self, userInfo: nil))
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        // 分隔线左右/上下 4px 抓取带内的拖拽光标（AppKit 托管，不用手动 push/pop）
+        for line in layout.splitLines(in: contentRect) {
+            addCursorRect(line.line.insetBy(dx: -4, dy: -4),
+                          cursor: line.dir == .v ? .resizeLeftRight : .resizeUpDown)
+        }
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        hoveredLinePath = layout.splitLines(in: contentRect)
+            .first { $0.line.insetBy(dx: -4, dy: -4).contains(p) }?.path
     }
 
     private func cellPath(at p: NSPoint) -> [Int]? {
@@ -547,6 +590,7 @@ private class EditorWindow: NSWindow {
         level = .screenSaver
         collectionBehavior = [.canJoinAllSpaces, .stationary]
         isReleasedWhenClosed = false
+        acceptsMouseMovedEvents = true // 分隔线悬停高亮/光标变形依赖 mouseMoved
         contentView = editorView
     }
 
@@ -557,6 +601,8 @@ private class EditorWindow: NSWindow {
 private class EditorToolbarPanel: NSPanel {
     init(session: LayoutEditorSession) {
         super.init(contentRect: NSRect(x: 0, y: 0, width: 720, height: 48),
+                   // 注意：不加 .hudWindow——HUD 外观会强制改写按钮样式，主按钮的
+                   // bezelColor 蓝色被吞掉；普通面板才能显出主操作层次
                    styleMask: [.titled, .nonactivatingPanel], backing: .buffered, defer: false)
         title = "分屏布局编辑"
         // 编辑面是 .screenSaver 级，工具条必须更高，否则被编辑面盖住、按钮点不到
@@ -566,23 +612,30 @@ private class EditorToolbarPanel: NSPanel {
         becomesKeyOnlyIfNeeded = true
         hidesOnDeactivate = false
 
-        let specs: [(String, Selector)] = [
-            ("左右分割", #selector(LayoutEditorSession.splitVertical)),
-            ("上下分割", #selector(LayoutEditorSession.splitHorizontal)),
-            ("合并", #selector(LayoutEditorSession.mergeSelected)),
-            ("重置此屏", #selector(LayoutEditorSession.resetScreen)),
-            ("复制到所有屏", #selector(LayoutEditorSession.copyToAllScreens)),
-            ("保存并应用", #selector(LayoutEditorSession.saveAndApply)),
-            ("取消", #selector(LayoutEditorSession.cancelEditing)),
+        // 分组排布：格子的编辑 | 整屏布局操作 | 取消/保存（主操作最右、蓝色强调）
+        let groups: [[(title: String, action: Selector, primary: Bool)]] = [
+            [("左右分割", #selector(LayoutEditorSession.splitVertical), false),
+             ("上下分割", #selector(LayoutEditorSession.splitHorizontal), false),
+             ("合并", #selector(LayoutEditorSession.mergeSelected), false)],
+            [("重置此屏", #selector(LayoutEditorSession.resetScreen), false),
+             ("复制到所有屏", #selector(LayoutEditorSession.copyToAllScreens), false)],
+            [("取消", #selector(LayoutEditorSession.cancelEditing), false),
+             ("保存并应用", #selector(LayoutEditorSession.saveAndApply), true)],
         ]
         let stack = NSStackView()
         stack.orientation = .horizontal
         stack.spacing = 8
-        stack.edgeInsets = NSEdgeInsets(top: 8, left: 10, bottom: 8, right: 10)
-        for (title, action) in specs {
-            let button = NSButton(title: title, target: session, action: action)
-            button.bezelStyle = .rounded
-            stack.addArrangedSubview(button)
+        stack.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
+        for (index, group) in groups.enumerated() {
+            for (title, action, primary) in group {
+                let button = NSButton(title: title, target: session, action: action)
+                button.bezelStyle = .rounded
+                if primary { button.bezelColor = .controlAccentColor }
+                stack.addArrangedSubview(button)
+            }
+            if index < groups.count - 1, let last = stack.arrangedSubviews.last {
+                stack.setCustomSpacing(22, after: last)
+            }
         }
         contentView = stack
         // 初始位置：主屏顶部居中（标题栏可拖动）
@@ -618,10 +671,14 @@ class LayoutEditorSession: NSObject {
         let panel = EditorToolbarPanel(session: self)
         panel.orderFrontRegardless()
         toolbar = panel
-        // Esc 随时取消
+        // Esc 取消 / Return 保存（本地监听：编辑面是 key 窗口，工具条按钮的 keyEquivalent 接不到）
         escMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if event.keyCode == 53 {
                 self?.end(save: false)
+                return nil
+            }
+            if event.keyCode == 36 || event.keyCode == 76 { // Return / 小键盘 Enter
+                self?.end(save: true)
                 return nil
             }
             return event
