@@ -64,6 +64,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Status Bar
 
+    /// 带 SF Symbol 图标的菜单项
+    private func makeItem(_ title: String, symbol: String?, action: Selector?, key: String = "") -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+        item.target = self
+        if let symbol {
+            item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        }
+        return item
+    }
+
     private func setupStatusBar() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.image = NSImage(systemSymbolName: "eye", accessibilityDescription: "Bento")
@@ -73,99 +83,78 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusMenu = NSMenu()
 
-        statusMenuItem = NSMenuItem(title: "Monitoring", action: nil, keyEquivalent: "")
+        statusMenuItem = NSMenuItem(title: "监控中", action: nil, keyEquivalent: "")
         statusMenu.addItem(statusMenuItem)
 
-        remoteMonitorItem = NSMenuItem(title: "远程连接自动熄屏", action: #selector(toggleRemoteMonitor), keyEquivalent: "")
-        remoteMonitorItem.target = self
+        statusMenu.addItem(.separator())
+        statusMenu.addItem(.sectionHeader(title: "远程熄屏"))
+
+        remoteMonitorItem = makeItem("远程连接自动熄屏", symbol: "eye.slash", action: #selector(toggleRemoteMonitor))
         remoteMonitorItem.state = remoteMonitorEnabled ? .on : .off
         statusMenu.addItem(remoteMonitorItem)
 
         // 熄屏模块的手动兜底：把镜像强制拆回扩展桌面（自动恢复失灵时用）
-        restoreDisplaysItem = NSMenuItem(title: "Restore Extended Displays", action: #selector(restoreExtendedDisplays), keyEquivalent: "")
-        restoreDisplaysItem.target = self
+        restoreDisplaysItem = makeItem("恢复扩展显示器", symbol: "display.2", action: #selector(restoreExtendedDisplays))
         statusMenu.addItem(restoreDisplaysItem)
 
         // 远程场景配件：认证重启，跳过 FileVault 开机解锁界面，重启后远程还能连回来
-        let authRestartItem = NSMenuItem(title: "FileVault AuthRestart", action: #selector(authRestart), keyEquivalent: "")
-        authRestartItem.target = self
-        statusMenu.addItem(authRestartItem)
+        statusMenu.addItem(makeItem("FileVault 免密重启", symbol: "lock.rotation", action: #selector(authRestart)))
 
-        scrollPermissionItem = NSMenuItem(title: "Scroll Permissions Needed", action: nil, keyEquivalent: "")
+        statusMenu.addItem(.separator())
+        statusMenu.addItem(.sectionHeader(title: "滚动方向"))
+
+        reverseMouseItem = makeItem("反转鼠标滚动", symbol: "computermouse", action: #selector(toggleReverseMouse))
+        reverseMouseItem.state = scrollReverser.reverseMouse ? .on : .off
+        statusMenu.addItem(reverseMouseItem)
+
+        reverseTrackpadItem = makeItem("反转触控板滚动", symbol: "hand.point.up.left", action: #selector(toggleReverseTrackpad))
+        reverseTrackpadItem.state = scrollReverser.reverseTrackpad ? .on : .off
+        statusMenu.addItem(reverseTrackpadItem)
+
+        scrollPermissionItem = NSMenuItem(title: "滚动功能缺少权限", action: nil, keyEquivalent: "")
         scrollPermissionItem.isEnabled = false
         scrollPermissionItem.isHidden = true
         statusMenu.addItem(scrollPermissionItem)
 
-        autoLaunchItem = NSMenuItem(title: "开机自启 (Launch at Login)", action: #selector(toggleAutoLaunch), keyEquivalent: "")
-        autoLaunchItem.target = self
-        autoLaunchItem.state = FileManager.default.fileExists(atPath: launchAgentPath) ? .on : .off
-        statusMenu.addItem(autoLaunchItem)
-
-        statusMenu.addItem(.separator())
-
-        reverseMouseItem = NSMenuItem(title: "Reverse Mouse Scroll", action: #selector(toggleReverseMouse), keyEquivalent: "")
-        reverseMouseItem.target = self
-        reverseMouseItem.state = scrollReverser.reverseMouse ? .on : .off
-        statusMenu.addItem(reverseMouseItem)
-
-        reverseTrackpadItem = NSMenuItem(title: "Reverse Trackpad Scroll", action: #selector(toggleReverseTrackpad), keyEquivalent: "")
-        reverseTrackpadItem.target = self
-        reverseTrackpadItem.state = scrollReverser.reverseTrackpad ? .on : .off
-        statusMenu.addItem(reverseTrackpadItem)
-
-        openAccessibilityItem = NSMenuItem(title: "Open Accessibility Settings", action: #selector(openAccessibilitySettings), keyEquivalent: "")
-        openAccessibilityItem.target = self
+        openAccessibilityItem = makeItem("打开「辅助功能」设置", symbol: "accessibility", action: #selector(openAccessibilitySettings))
         openAccessibilityItem.isHidden = true
         statusMenu.addItem(openAccessibilityItem)
 
-        openInputMonitoringItem = NSMenuItem(title: "Open Input Monitoring Settings", action: #selector(openInputMonitoringSettings), keyEquivalent: "")
-        openInputMonitoringItem.target = self
+        openInputMonitoringItem = makeItem("打开「输入监控」设置", symbol: "keyboard", action: #selector(openInputMonitoringSettings))
         openInputMonitoringItem.isHidden = true
         statusMenu.addItem(openInputMonitoringItem)
 
-        retryScrollPermissionsItem = NSMenuItem(title: "Retry Scroll Permissions", action: #selector(retryScrollPermissions), keyEquivalent: "")
-        retryScrollPermissionsItem.target = self
+        retryScrollPermissionsItem = makeItem("重新检测滚动权限", symbol: "arrow.clockwise", action: #selector(retryScrollPermissions))
         retryScrollPermissionsItem.isHidden = true
         statusMenu.addItem(retryScrollPermissionsItem)
 
         statusMenu.addItem(.separator())
+        statusMenu.addItem(.sectionHeader(title: "分屏（窗口吸附）"))
 
-        // —— 分屏 ——
-        let tilingHeader = NSMenuItem(title: "分屏（窗口吸附）", action: nil, keyEquivalent: "")
-        tilingHeader.isEnabled = false
-        statusMenu.addItem(tilingHeader)
-
-        tilingPermissionItem = NSMenuItem(title: "分屏需要辅助功能权限（点击打开设置）", action: #selector(openAccessibilitySettings), keyEquivalent: "")
-        tilingPermissionItem.target = self
+        tilingPermissionItem = makeItem("分屏需要辅助功能权限（点击打开设置）", symbol: "exclamationmark.triangle", action: #selector(openAccessibilitySettings))
         tilingPermissionItem.isHidden = true
         statusMenu.addItem(tilingPermissionItem)
 
         // 单一总开关：开 = 双击标题栏吸附 + ⌘ 拖动标题栏吸附都可用
-        tilingMasterItem = NSMenuItem(title: "启用分屏", action: #selector(toggleTilingMaster), keyEquivalent: "")
-        tilingMasterItem.target = self
+        tilingMasterItem = makeItem("启用分屏", symbol: "uiwindow.split.2x1", action: #selector(toggleTilingMaster))
         statusMenu.addItem(tilingMasterItem)
 
-        let editLayoutsItem = NSMenuItem(title: "编辑分屏布局…", action: #selector(editTilingLayouts), keyEquivalent: "")
-        editLayoutsItem.target = self
-        statusMenu.addItem(editLayoutsItem)
+        statusMenu.addItem(makeItem("编辑分屏布局…", symbol: "squareshape.split.2x2.dotted", action: #selector(editTilingLayouts)))
 
         statusMenu.addItem(.separator())
+        statusMenu.addItem(.sectionHeader(title: "菜单栏图标"))
 
-        let manageIconsItem = NSMenuItem(title: "管理菜单栏图标…", action: #selector(openIconManager), keyEquivalent: "")
-        manageIconsItem.target = self
-        statusMenu.addItem(manageIconsItem)
+        statusMenu.addItem(makeItem("管理菜单栏图标…", symbol: "menubar.rectangle", action: #selector(openIconManager)))
 
         updateTilingMenuStates()
 
         statusMenu.addItem(.separator())
 
-        let aboutItem = NSMenuItem(title: "Remote/Screen Sharing auto screen-off", action: nil, keyEquivalent: "")
-        aboutItem.isEnabled = false
-        statusMenu.addItem(aboutItem)
+        autoLaunchItem = makeItem("开机自启", symbol: "power", action: #selector(toggleAutoLaunch))
+        autoLaunchItem.state = FileManager.default.fileExists(atPath: launchAgentPath) ? .on : .off
+        statusMenu.addItem(autoLaunchItem)
 
-        let quitItem = NSMenuItem(title: "Quit", action: #selector(quitApp), keyEquivalent: "q")
-        quitItem.target = self
-        statusMenu.addItem(quitItem)
+        statusMenu.addItem(makeItem("退出 Bento", symbol: nil, action: #selector(quitApp), key: "q"))
 
         statusItem.menu = statusMenu
     }
@@ -239,22 +228,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if tilingPermissionMissing {
             // 未授予辅助功能权限时，菜单栏图标给出明确状态
             statusMenuItem.title = "需要辅助功能权限"
+            statusMenuItem.image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: nil)
             statusItem.button?.image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: "Bento 需要辅助功能权限")
             statusItem.button?.title = ""
             return
         }
         if !remoteMonitorEnabled {
             statusMenuItem.title = "远程熄屏监控已停用"
+            statusMenuItem.image = NSImage(systemSymbolName: "pause.circle", accessibilityDescription: nil)
             statusItem.button?.image = NSImage(systemSymbolName: "eye", accessibilityDescription: nil)
             statusItem.button?.title = ""
             return
         }
         if screenCtl.isScreenBlack {
-            statusMenuItem.title = "Remote Connected · Screen Off"
+            statusMenuItem.title = "远程已连接 · 已熄屏"
+            statusMenuItem.image = NSImage(systemSymbolName: "eye.slash.fill", accessibilityDescription: nil)
             statusItem.button?.image = NSImage(systemSymbolName: "eye.slash.fill", accessibilityDescription: nil)
-            statusItem.button?.title = " Screen Off"
+            statusItem.button?.title = " 已熄屏"
         } else {
-            statusMenuItem.title = "Monitoring"
+            statusMenuItem.title = "监控中"
+            statusMenuItem.image = NSImage(systemSymbolName: "checkmark.circle", accessibilityDescription: nil)
             statusItem.button?.image = NSImage(systemSymbolName: "eye", accessibilityDescription: nil)
             statusItem.button?.title = ""
         }
@@ -300,8 +293,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         openInputMonitoringItem.isHidden = !missing
         retryScrollPermissionsItem.isHidden = !missing
 
-        reverseMouseItem.title = missing ? "Reverse Mouse Scroll (Grant Permissions)" : "Reverse Mouse Scroll"
-        reverseTrackpadItem.title = missing ? "Reverse Trackpad Scroll (Grant Permissions)" : "Reverse Trackpad Scroll"
+        reverseMouseItem.title = missing ? "反转鼠标滚动（需授权）" : "反转鼠标滚动"
+        reverseTrackpadItem.title = missing ? "反转触控板滚动（需授权）" : "反转触控板滚动"
         reverseMouseItem.isEnabled = !missing
         reverseTrackpadItem.isEnabled = !missing
         reverseMouseItem.state = scrollReverser.reverseMouse ? .on : .off
