@@ -97,14 +97,14 @@ ensure_local_codesign_identity() {
 }
 
 echo "Compiling $APP_NAME (Universal Binary)..."
-swiftc "$SCRIPT_DIR/$APP_NAME.swift" \
+swiftc "$SCRIPT_DIR"/Sources/*.swift \
     -O \
     -o "$SCRIPT_DIR/${APP_NAME}_arm64" \
     -target arm64-apple-macosx14.0 \
     -framework AppKit \
     -framework CoreGraphics \
     -framework IOKit
-swiftc "$SCRIPT_DIR/$APP_NAME.swift" \
+swiftc "$SCRIPT_DIR"/Sources/*.swift \
     -O \
     -o "$SCRIPT_DIR/${APP_NAME}_x86_64" \
     -target x86_64-apple-macosx14.0 \
