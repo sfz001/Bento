@@ -469,7 +469,7 @@ class MenuBarIconManager: NSObject {
             return
         }
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 400, height: 480),
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 580),
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered, defer: false
         )
@@ -477,17 +477,23 @@ class MenuBarIconManager: NSObject {
         window.isReleasedWhenClosed = false
         window.center()
 
-        let hint = NSTextField(wrappingLabelWithString: "勾选 = 显示，取消勾选 = 隐藏（收进菜单栏「«」溢出区）；拖动行调整顺序（上 = 菜单栏左）\n时钟与控制中心被系统固定，无法管理；Bento 本尊只可排序")
+        // 普通窗口没有双行标题，提示放窗口内顶部
+        let hint = NSTextField(labelWithString: "拖动排序（上 = 菜单栏左）· 关闭开关 = 收进「«」溢出区")
         hint.font = NSFont.systemFont(ofSize: 11)
         hint.textColor = .secondaryLabelColor
+        hint.lineBreakMode = .byTruncatingTail
+        hint.translatesAutoresizingMaskIntoConstraints = false
 
         let table = NSTableView()
         table.headerView = nil
-        table.rowHeight = 26
+        table.rowHeight = 36
+        table.style = .inset
+        table.selectionHighlightStyle = .none
         table.allowsMultipleSelection = false
-        table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
+        table.intercellSpacing = NSSize(width: 0, height: 2)
+        table.backgroundColor = .clear
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("main"))
-        column.width = 340
+        column.width = 380
         table.addTableColumn(column)
         table.dataSource = self
         table.delegate = self
@@ -497,28 +503,39 @@ class MenuBarIconManager: NSObject {
         let scroll = NSScrollView()
         scroll.documentView = table
         scroll.hasVerticalScroller = true
-        scroll.borderType = .bezelBorder
+        scroll.borderType = .noBorder
+        scroll.drawsBackground = false
         scroll.translatesAutoresizingMaskIntoConstraints = false
-        hint.translatesAutoresizingMaskIntoConstraints = false
 
-        // 逃生舱：一键全部恢复显示（比如状态不收敛、或想推倒重来）
+        // 底部脚注 + 逃生舱按钮
+        let footnote = NSTextField(wrappingLabelWithString: "时钟与控制中心由系统固定 · Bento 本尊不可隐藏")
+        footnote.font = NSFont.systemFont(ofSize: 10)
+        footnote.textColor = .tertiaryLabelColor
+        footnote.translatesAutoresizingMaskIntoConstraints = false
+
         let showAll = NSButton(title: "全部恢复显示", target: self, action: #selector(showAllRows))
         showAll.bezelStyle = .rounded
+        showAll.controlSize = .small
+        showAll.font = NSFont.systemFont(ofSize: 11)
         showAll.translatesAutoresizingMaskIntoConstraints = false
 
         let content = NSView()
         content.addSubview(hint)
         content.addSubview(scroll)
+        content.addSubview(footnote)
         content.addSubview(showAll)
         NSLayoutConstraint.activate([
-            hint.topAnchor.constraint(equalTo: content.topAnchor, constant: 12),
-            hint.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 14),
-            hint.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -14),
-            scroll.topAnchor.constraint(equalTo: hint.bottomAnchor, constant: 8),
-            scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 14),
-            scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -14),
-            scroll.bottomAnchor.constraint(equalTo: showAll.topAnchor, constant: -10),
-            showAll.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 14),
+            hint.topAnchor.constraint(equalTo: content.topAnchor, constant: 10),
+            hint.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
+            hint.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -20),
+            scroll.topAnchor.constraint(equalTo: hint.bottomAnchor, constant: 6),
+            scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            scroll.bottomAnchor.constraint(equalTo: showAll.topAnchor, constant: -8),
+            footnote.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
+            footnote.centerYAnchor.constraint(equalTo: showAll.centerYAnchor),
+            footnote.trailingAnchor.constraint(lessThanOrEqualTo: showAll.leadingAnchor, constant: -12),
+            showAll.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
             showAll.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12),
         ])
         window.contentView = content
@@ -536,7 +553,33 @@ class MenuBarIconManager: NSObject {
         queue.async { self.enforce(force: true) }
     }
 
-    @objc private func rowToggled(_ sender: NSButton) {
+    /// 行图标：第三方用应用图标，系统模块/本尊用 SF Symbol
+    private func rowIcon(for key: String) -> NSImage? {
+        if key == "bento:main" {
+            return NSImage(systemSymbolName: "eye", accessibilityDescription: nil)
+        }
+        if key.hasPrefix("module:") {
+            let name = key.dropFirst("module:".count)
+            let symbol: String
+            if name.hasPrefix("Battery") { symbol = "battery.100" }
+            else if name.hasPrefix("WiFi") { symbol = "wifi" }
+            else if name.hasPrefix("UserSwitcher") { symbol = "person.crop.circle" }
+            else if name.hasPrefix("Sound") { symbol = "speaker.wave.2" }
+            else { symbol = "gearshape" }
+            return NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        }
+        let bundleID = String(key.split(separator: "|").first ?? "")
+        if let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first,
+           let icon = app.icon {
+            return icon
+        }
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+            return NSWorkspace.shared.icon(forFile: url.path)
+        }
+        return NSImage(systemSymbolName: "app.dashed", accessibilityDescription: nil)
+    }
+
+    @objc private func rowToggled(_ sender: NSSwitch) {
         guard let key = sender.identifier?.rawValue else { return }
         setRowHidden(key, sender.state == .off)
     }
@@ -559,22 +602,51 @@ extension MenuBarIconManager: NSTableViewDataSource, NSTableViewDelegate {
         guard rows.indices.contains(row) else { return nil }
         let r = rows[row]
         let cell = NSTableCellView()
-        let checkbox = NSButton(checkboxWithTitle: r.name, target: self, action: #selector(rowToggled(_:)))
-        checkbox.state = r.isHidden ? .off : .on
-        checkbox.identifier = NSUserInterfaceItemIdentifier(r.key)
-        checkbox.isEnabled = r.canHide
-        checkbox.lineBreakMode = .byTruncatingTail
-        checkbox.translatesAutoresizingMaskIntoConstraints = false
-        cell.addSubview(checkbox)
-        let grip = NSTextField(labelWithString: "≡")
-        grip.textColor = .tertiaryLabelColor
+
+        let iconView = NSImageView()
+        iconView.image = rowIcon(for: r.key)
+        if r.key.hasPrefix("module:") || r.key == "bento:main" {
+            iconView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
+            iconView.contentTintColor = .secondaryLabelColor
+        }
+        iconView.imageScaling = .scaleProportionallyUpOrDown
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        cell.addSubview(iconView)
+
+        let label = NSTextField(labelWithString: r.name)
+        label.font = NSFont.systemFont(ofSize: 13)
+        label.textColor = r.isHidden ? .secondaryLabelColor : .labelColor
+        label.lineBreakMode = .byTruncatingTail
+        label.translatesAutoresizingMaskIntoConstraints = false
+        cell.addSubview(label)
+
+        let toggle = NSSwitch()
+        toggle.controlSize = .small
+        toggle.state = r.isHidden ? .off : .on
+        toggle.identifier = NSUserInterfaceItemIdentifier(r.key)
+        toggle.target = self
+        toggle.action = #selector(rowToggled(_:))
+        toggle.isEnabled = r.canHide
+        toggle.translatesAutoresizingMaskIntoConstraints = false
+        cell.addSubview(toggle)
+
+        let grip = NSImageView(image: NSImage(systemSymbolName: "line.3.horizontal", accessibilityDescription: "拖动排序")!)
+        grip.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
+        grip.contentTintColor = .tertiaryLabelColor
         grip.translatesAutoresizingMaskIntoConstraints = false
         cell.addSubview(grip)
+
         NSLayoutConstraint.activate([
-            checkbox.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
-            checkbox.trailingAnchor.constraint(lessThanOrEqualTo: grip.leadingAnchor, constant: -6),
-            checkbox.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-            grip.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -6),
+            iconView.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 8),
+            iconView.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            iconView.widthAnchor.constraint(equalToConstant: 22),
+            iconView.heightAnchor.constraint(equalToConstant: 22),
+            label.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 9),
+            label.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: toggle.leadingAnchor, constant: -10),
+            toggle.trailingAnchor.constraint(equalTo: grip.leadingAnchor, constant: -12),
+            toggle.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            grip.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -10),
             grip.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
         ])
         return cell
