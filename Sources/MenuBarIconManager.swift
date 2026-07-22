@@ -1,7 +1,6 @@
 import AppKit
 import CoreGraphics
 import Foundation
-import IOKit
 
 // MARK: - Menu Bar Icon Manager (菜单栏图标管理)
 
@@ -64,6 +63,11 @@ class MenuBarIconManager: NSObject {
     /// 变更检测：agent 字典 + 运行中 App 集合的签名；没变且未超兜底间隔就跳过 AX 枚举（重活）
     private var lastSignature = 0
     private var lastFullPass = Date.distantPast
+    /// AX 探测记忆：探测过的 pid / 确认有菜单栏图标的 pid（常规轮跳过确认无图标的进程）
+    private var probedPIDs = Set<pid_t>()
+    private var extrasPIDs = Set<pid_t>()
+    /// bundleID → CFBundleName 缓存（读 bundle 是磁盘操作）
+    private var bundleNameCache: [String: String] = [:]
     /// 管理界面数据（主线程发布）
     fileprivate(set) var rows: [Row] = []
     /// 列表更新回调（在主线程调用）
@@ -108,10 +112,8 @@ class MenuBarIconManager: NSObject {
     // MARK: 图标枚举与身份识别（后台线程）
 
     private struct ExtraItem {
-        let midX: CGFloat
         let title: String
         let desc: String
-        let axIdentifier: String
     }
 
     /// 读某个进程的 AXExtrasMenuBar 子元素
@@ -125,21 +127,15 @@ class MenuBarIconManager: NSObject {
         AXUIElementCopyAttributeValue(bar as! AXUIElement, kAXChildrenAttribute as CFString, &children)
         var out: [ExtraItem] = []
         for el in children as? [AXUIElement] ?? [] {
-            var title: AnyObject?, desc: AnyObject?, pos: AnyObject?, size: AnyObject?, ident: AnyObject?
+            var title: AnyObject?, desc: AnyObject?, size: AnyObject?
             AXUIElementCopyAttributeValue(el, kAXTitleAttribute as CFString, &title)
             AXUIElementCopyAttributeValue(el, kAXDescriptionAttribute as CFString, &desc)
-            AXUIElementCopyAttributeValue(el, kAXPositionAttribute as CFString, &pos)
             AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &size)
-            AXUIElementCopyAttributeValue(el, kAXIdentifierAttribute as CFString, &ident)
-            var p = CGPoint.zero
             var s = CGSize.zero
-            if let pos { AXValueGetValue(pos as! AXValue, .cgPoint, &p) }
             if let size { AXValueGetValue(size as! AXValue, .cgSize, &s) }
             guard s.width > 0 else { continue } // 无尺寸的是占位/系统隐藏项
-            out.append(ExtraItem(midX: p.x + s.width / 2,
-                                 title: (title as? String) ?? "",
-                                 desc: (desc as? String) ?? "",
-                                 axIdentifier: (ident as? String) ?? ""))
+            out.append(ExtraItem(title: (title as? String) ?? "",
+                                 desc: (desc as? String) ?? ""))
         }
         return out
     }
@@ -148,29 +144,49 @@ class MenuBarIconManager: NSObject {
     private struct LiveItem {
         let key: String          // 持久化键：bundleID|序号（title 可能是动态角标，不能入键）
         let displayName: String
+        let stableName: String   // 不含易变部分（行情/角标）的名字，进 iconNames 持久化缓存
         let entryKeys: [String]  // 它在 agent 字典里的条目键（现有配对的，或新建候选）
     }
 
     /// 枚举所有第三方图标，并解析每个图标在 agent 字典里的条目键。
     /// Spotlight/输入法/Siri 等系统代理的图标也是普通 extras 项，一并纳入；
     /// 只排除控制中心与 MenuBarAgent 自身（它们的 extras 是系统模块的宿主）。
-    private func enumerateItems(positions: [String: Double]) -> [LiveItem] {
+    /// fullProbe = false 时只探测「已知有图标的 pid + 首次见到的 pid」；
+    /// 60s 兜底全量轮传 true，覆盖“App 启动很久后才创建图标”的场景
+    private func enumerateItems(positions: [String: Double],
+                                runningApps: [NSRunningApplication],
+                                fullProbe: Bool) -> [LiveItem] {
         var out: [LiveItem] = []
         let myPID = ProcessInfo.processInfo.processIdentifier
-        for app in NSWorkspace.shared.runningApplications {
+        var alivePIDs = Set<pid_t>()
+        for app in runningApps {
             let pid = app.processIdentifier
             guard pid != myPID, let bundleID = app.bundleIdentifier,
                   bundleID != "com.apple.controlcenter",
                   bundleID != "com.apple.MenuBarAgent" else { continue }
+            alivePIDs.insert(pid)
+            // 大多数进程没有菜单栏图标：探测过且确认没有的，常规轮直接跳过 AX 往返
+            if !fullProbe, probedPIDs.contains(pid), !extrasPIDs.contains(pid) { continue }
             let items = extras(of: pid)
-            guard !items.isEmpty else { continue }
+            probedPIDs.insert(pid)
+            if items.isEmpty {
+                extrasPIDs.remove(pid)
+                continue
+            }
+            extrasPIDs.insert(pid)
             let appName = app.localizedName ?? bundleID
-            // 条目键前缀：正规签名 App 用 bundleID，ad-hoc/无签名用 CFBundleName（≈可执行名）
+            // 条目键前缀：正规签名 App 用 bundleID，ad-hoc/无签名用 CFBundleName（≈可执行名）。
+            // CFBundleName 按 bundleID 缓存，避免每轮读磁盘 bundle
             var prefixes = ["status:\(bundleID)::"]
-            if let url = app.bundleURL,
-               let name = Bundle(url: url)?.infoDictionary?["CFBundleName"] as? String,
-               !name.isEmpty, name != bundleID {
-                prefixes.append("status:\(name)::")
+            let cfName: String
+            if let cached = bundleNameCache[bundleID] {
+                cfName = cached
+            } else {
+                cfName = (app.bundleURL.flatMap { Bundle(url: $0)?.infoDictionary?["CFBundleName"] as? String }) ?? ""
+                bundleNameCache[bundleID] = cfName
+            }
+            if !cfName.isEmpty, cfName != bundleID {
+                prefixes.append("status:\(cfName)::")
             }
             // 该 App 现有条目数与图标数一致时按序配对（覆盖 "Siri"/"Item-1" 这类非默认 autosaveName）
             let existing = positions.keys.filter { k in prefixes.contains { k.hasPrefix($0) } }.sorted()
@@ -180,9 +196,13 @@ class MenuBarIconManager: NSObject {
                 let entryKeys = existing.count == items.count
                     ? [existing[idx]]
                     : prefixes.map { $0 + "Item-\(idx)" }
-                out.append(LiveItem(key: "\(bundleID)|\(idx + 1)", displayName: name, entryKeys: entryKeys))
+                out.append(LiveItem(key: "\(bundleID)|\(idx + 1)", displayName: name,
+                                    stableName: appName, entryKeys: entryKeys))
             }
         }
+        // 只保留还活着的 pid，防止长时间运行后集合无限膨胀（pid 会被系统复用）
+        probedPIDs.formIntersection(alivePIDs)
+        extrasPIDs.formIntersection(alivePIDs)
         return out
     }
 
@@ -201,9 +221,8 @@ class MenuBarIconManager: NSObject {
     ]
 
     /// 枚举 MenuBarAgent 托管的系统模块（电池/Wi‑Fi/用户切换…），键直接用 module: 条目键
-    private func enumerateModules(positions: [String: Double]) -> [LiveItem] {
-        guard let mba = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.MenuBarAgent").first
-        else { return [] }
+    private func enumerateModules(positions: [String: Double], mbaApp: NSRunningApplication) -> [LiveItem] {
+        let mba = mbaApp
         var found: [(id: String, desc: String)] = []
         func walk(_ el: AXUIElement, _ depth: Int) {
             guard depth <= 5 else { return }
@@ -238,7 +257,8 @@ class MenuBarIconManager: NSObject {
             else { continue }
             // desc 可能带实时状态（"Wi‑Fi，已接入，3格"），截到第一个逗号
             let clean = desc.split(separator: "，").first.map(String.init) ?? desc
-            out.append(LiveItem(key: entryKey, displayName: clean.isEmpty ? name : clean, entryKeys: [entryKey]))
+            let display = clean.isEmpty ? name : clean
+            out.append(LiveItem(key: entryKey, displayName: display, stableName: display, entryKeys: [entryKey]))
         }
         return out
     }
@@ -255,15 +275,16 @@ class MenuBarIconManager: NSObject {
 
     private func enforce(force: Bool = false) {
         guard AXIsProcessTrustedWithOptions(nil) else { return }
+        let runningApps = NSWorkspace.shared.runningApplications
         // MenuBarAgent 不在 = 不是 macOS 27 的菜单栏机制，本模块不适用
-        guard !NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.MenuBarAgent").isEmpty
+        guard let mbaApp = runningApps.first(where: { $0.bundleIdentifier == "com.apple.MenuBarAgent" })
         else { return }
         let skipAdoption = suppressAdoptionOnce
         suppressAdoptionOnce = false
 
         var raw = readRawPositions()
         let positions = raw.compactMapValues { ($0 as? NSNumber)?.doubleValue }
-        let runningIDs = NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier).sorted()
+        let runningIDs = runningApps.compactMap(\.bundleIdentifier).sorted()
 
         // —— 门控：agent 字典和运行 App 集都没变且未超兜底间隔，就不跑 AX 枚举（重活）——
         var hasher = Hasher()
@@ -274,10 +295,11 @@ class MenuBarIconManager: NSObject {
         guard force || stale || signature != lastSignature else { return }
         lastFullPass = Date()
 
-        var items = enumerateItems(positions: positions)
-        items += enumerateModules(positions: positions)
+        var items = enumerateItems(positions: positions, runningApps: runningApps, fullProbe: stale)
+        items += enumerateModules(positions: positions, mbaApp: mbaApp)
         // Bento 本尊也作为一行参与排序（不可隐藏，setRowHidden 与采纳都有防御）
-        items.append(LiveItem(key: "bento:main", displayName: "Bento", entryKeys: ownEntryKeys("BentoMain")))
+        items.append(LiveItem(key: "bento:main", displayName: "Bento", stableName: "Bento",
+                              entryKeys: ownEntryKeys("BentoMain")))
         let byKey = Dictionary(uniqueKeysWithValues: items.map { ($0.key, $0) })
         if hiddenKeys.contains("bento:main") { hiddenKeys.remove("bento:main") }
 
@@ -292,7 +314,6 @@ class MenuBarIconManager: NSObject {
         // 用瞬态实际坐标整体重写字典，位置数值不能当隐藏意图；隐藏/显示只听 UI。
         // 顺序采纳每轮必做（含启动首轮）：菜单栏实际排列是顺序的事实来源，
         // 决不能反过来用陈旧的持久化顺序去重排用户的菜单栏。
-        // UI 操作触发的一轮跳过（别把用户刚拖好的顺序又用旧位置覆盖回去）
         let placed: [(key: String, pos: Double)] = items.compactMap { it in
             currentPos(of: it, in: positions).map { (it.key, $0) }
         }
@@ -310,20 +331,25 @@ class MenuBarIconManager: NSObject {
         }
         // 新出现的键按当前实际位置插入顺序表：从右往左处理，各自插到右邻之前，
         // 顺序表首次接管系统模块/本尊时不会打乱它们的现有排列
+        // 在本地副本上改，循环外一次性赋值：didSet 每次赋值都写 UserDefaults，逐元素改会写放大
         let posOrder = placed.sorted { $0.pos > $1.pos }.map(\.key) // 左→右
-        for key in posOrder.reversed() where !iconOrder.contains(key) {
+        var order = iconOrder
+        for key in posOrder.reversed() where !order.contains(key) {
             if let idx = posOrder.firstIndex(of: key),
-               let successor = posOrder.dropFirst(idx + 1).first(where: { iconOrder.contains($0) }),
-               let insertAt = iconOrder.firstIndex(of: successor) {
-                iconOrder.insert(key, at: insertAt)
+               let successor = posOrder.dropFirst(idx + 1).first(where: { order.contains($0) }),
+               let insertAt = order.firstIndex(of: successor) {
+                order.insert(key, at: insertAt)
             } else {
-                iconOrder.append(key)
+                order.append(key)
             }
         }
         // 连字典条目都还没有的全新图标：追加到末尾
-        for item in items where !iconOrder.contains(item.key) { iconOrder.append(item.key) }
-        // 名字缓存（App 退出后隐藏行还得有名字）
-        for item in items where iconNames[item.key] != item.displayName { iconNames[item.key] = item.displayName }
+        for item in items where !order.contains(item.key) { order.append(item.key) }
+        if order != iconOrder { iconOrder = order }
+        // 名字缓存（App 退出后隐藏行还得有名字）：只存稳定名，行情/角标这类易变文本不进磁盘
+        var names = iconNames
+        for item in items { names[item.key] = item.stableName }
+        if names != iconNames { iconNames = names }
 
         let present = Set(items.map(\.key))
         let visibleList = iconOrder.filter { present.contains($0) && !hiddenKeys.contains($0) }

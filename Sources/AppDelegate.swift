@@ -10,6 +10,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusMenu: NSMenu!
     private var statusMenuItem: NSMenuItem!
 
+    private var restoreDisplaysItem: NSMenuItem!
     private let screenCtl = ScreenController()
     private let scrollReverser = ScrollReverser()
     private var remoteMonitorEnabled = UserDefaults.standard.object(forKey: "RemoteMonitorEnabled") as? Bool ?? true
@@ -19,7 +20,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var retryScrollPermissionsItem: NSMenuItem!
     private var reverseMouseItem: NSMenuItem!
     private var reverseTrackpadItem: NSMenuItem!
-    private var restoreDisplaysItem: NSMenuItem!
     // 分屏
     private let tiling = TilingController()
     // 远程熄屏监控开关（默认开）
@@ -31,6 +31,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // 菜单栏图标管理
     private let iconMgr = MenuBarIconManager()
     private var pollTimer: DispatchSourceTimer?
+    /// 上一轮轮询的连接状态（nil = 尚未轮询过），用于边沿触发
+    private var lastPolledConnected: Bool?
     private let pollQueue = DispatchQueue(label: "com.sz.bento.connection-poll")
     private var hasShownScrollPermissionAlert = false
 
@@ -159,12 +161,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = statusMenu
     }
 
-    // MARK: - Connection Detection (1s process poll)
+    // MARK: - Connection Detection (3s process poll)
 
     private func startPollTimer() {
         stopPollTimer()
         let timer = DispatchSource.makeTimerSource(queue: pollQueue)
-        timer.schedule(deadline: .now(), repeating: 1, leeway: .milliseconds(200))
+        // 3s 足够快（远程连接不是亚秒级事件），进程创建开销降到 1/3
+        timer.schedule(deadline: .now(), repeating: 3, leeway: .milliseconds(300))
         timer.setEventHandler { [weak self] in
             self?.pollConnectionState()
         }
@@ -182,10 +185,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func isScreenSharingConnected() -> Bool {
-        // Match only the *local* address column ($4) so an outbound VNC
-        // connection from this Mac to another host's 5900 doesn't trigger.
-        let script = "/usr/sbin/netstat -an -p tcp | /usr/bin/awk '$4 ~ /\\.5900$/ && $6 == \"ESTABLISHED\" {found=1; exit} END {exit !found}'"
-        return runProcess("/bin/sh", ["-c", script]).status == 0
+        // 只匹配本地地址列（第 4 列）：本机主动连别人 5900 不算。
+        // 直接跑 netstat 在 Swift 里解析，省掉 sh+awk 两个进程
+        let out = runProcess("/usr/sbin/netstat", ["-an", "-p", "tcp"], captureOutput: true).output
+        for line in out.split(separator: "\n") {
+            let cols = line.split(separator: " ", omittingEmptySubsequences: true)
+            if cols.count >= 6, cols[3].hasSuffix(".5900"), cols[5] == "ESTABLISHED" {
+                return true
+            }
+        }
+        return false
     }
 
     /// Runs on pollQueue: process/netstat checks block, so they stay off the
@@ -217,9 +226,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             screenCtl.disableMirroring(forceFallback: true)
             screenCtl.lockScreen()
             updateStatus()
-        } else if !connected {
+        } else if !connected, lastPolledConnected != false {
+            // 只在启动首轮和连接边沿做一次镜像清理，空闲时不再每跳空转
             screenCtl.disableMirroring()
         }
+        lastPolledConnected = connected
     }
 
     // MARK: - UI Updates
@@ -447,4 +458,5 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         try? FileManager.default.removeItem(atPath: oldPath)
         NSLog("Migration: removed legacy LaunchAgent \(legacyLaunchAgentLabel)")
     }
+
 }

@@ -1,7 +1,6 @@
 import AppKit
 import CoreGraphics
 import Foundation
-import IOKit
 
 // MARK: - Window Tiling (分屏)
 
@@ -799,10 +798,11 @@ class TilingController: NSObject {
 
     private func installTap() {
         removeTap()
+        // 不订阅 mouseMoved：⌘ 拖拽期间系统发的是 leftMouseDragged，
+        // 订阅 mouseMoved 只会让每次鼠标移动都空跑一趟回调（稳态纯浪费）
         let mask: CGEventMask = (1 << CGEventType.leftMouseDown.rawValue)
             | (1 << CGEventType.leftMouseUp.rawValue)
             | (1 << CGEventType.leftMouseDragged.rawValue)
-            | (1 << CGEventType.mouseMoved.rawValue)
         let userInfo = Unmanaged.passUnretained(self).toOpaque()
         guard let port = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
