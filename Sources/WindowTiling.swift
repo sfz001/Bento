@@ -268,9 +268,14 @@ struct OnScreenWindowInfo {
 /// 对其它 App 窗口的 AX 读写集中在这里
 class WindowManager {
     private let myPid = ProcessInfo.processInfo.processIdentifier
+    // 短 TTL 缓存：⌘ 点击很常见，每次都全量 CGWindowList 枚举太浪费；
+    // 80ms 内的连续调用（含 ⌘ 双击路径的两次背靠背查询）复用同一份快照
+    private var windowsCache: [OnScreenWindowInfo] = []
+    private var windowsCacheAt = Date.distantPast
 
     /// 当前屏幕上 layer-0 窗口（front-to-back），排除本进程（避免拦到自己）
     func onScreenWindows() -> [OnScreenWindowInfo] {
+        if Date().timeIntervalSince(windowsCacheAt) < 0.08 { return windowsCache }
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
         else { return [] }
         var result: [OnScreenWindowInfo] = []
@@ -283,6 +288,8 @@ class WindowManager {
             else { continue }
             result.append(OnScreenWindowInfo(id: number, pid: pid, bounds: bounds))
         }
+        windowsCache = result
+        windowsCacheAt = Date()
         return result
     }
 
@@ -713,6 +720,8 @@ private struct DragSnapSession {
     let windowID: CGWindowID
     var didMove = false
     var highlightedCellAppKit: CGRect?
+    /// 各屏格子快照（uuid, visibleFrame, rects）：布局在拖拽期间不变，开始时算一次
+    var cellRectsByScreen: [(uuid: String, frame: CGRect, rects: [CGRect])] = []
 }
 
 private func tilingEventCallback(
@@ -1096,7 +1105,14 @@ class TilingController: NSObject {
         guard drag == nil else { return }
         guard let hit = windowMgr.titlebarHit(at: cgPoint, bandHeight: TilingController.titleBarBandHeight)
         else { return }
-        drag = DragSnapSession(pid: hit.pid, windowID: hit.windowID)
+        var session = DragSnapSession(pid: hit.pid, windowID: hit.windowID)
+        for screen in NSScreen.screens {
+            guard let uuid = DisplayKeys.uuid(for: screen) else { continue }
+            let layout = config.layouts[uuid] ?? .cell
+            session.cellRectsByScreen.append((uuid, screen.visibleFrame,
+                                              layout.cellRects(in: screen.visibleFrame).map(\.rect)))
+        }
+        drag = session
         showOverlays()
         updateDragHighlight(at: cgPoint)
     }
@@ -1105,14 +1121,13 @@ class TilingController: NSObject {
         let p = CoordConv.fromCG(cgPoint)
         var foundUUID: String?
         var foundRect: CGRect?
-        for screen in NSScreen.screens {
-            guard screen.visibleFrame.contains(p), let uuid = DisplayKeys.uuid(for: screen) else { continue }
-            let layout = config.layouts[uuid] ?? .cell
-            for (_, rect) in layout.cellRects(in: screen.visibleFrame) where rect.contains(p) {
-                foundUUID = uuid
+        for entry in drag?.cellRectsByScreen ?? [] {
+            guard entry.frame.contains(p) else { continue }
+            if let rect = entry.rects.first(where: { $0.contains(p) }) {
+                foundUUID = entry.uuid
                 foundRect = rect
-                break
             }
+            break
         }
         for (uuid, overlay) in overlays {
             overlay.setHighlight(globalRect: uuid == foundUUID ? foundRect : nil)

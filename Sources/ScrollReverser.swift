@@ -122,6 +122,9 @@ class ScrollReverser {
         }
     }
 
+    private var selfHealingInstalled = false
+    private var watchdog: Timer?
+
     var reverseTrackpad: Bool {
         get { cachedReverseTrackpad }
         set {
@@ -159,13 +162,38 @@ class ScrollReverser {
         }
 
         let activeSrc = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, active, 0)
-        CFRunLoopAddSource(CFRunLoopGetCurrent(), activeSrc, .commonModes)
+        CFRunLoopAddSource(CFRunLoopGetMain(), activeSrc, .commonModes)
         CGEvent.tapEnable(tap: active, enable: true)
 
         activeTap = active
         activeRunLoopSource = activeSrc
+        installSelfHealing()
         NSLog("ScrollReverser: taps installed (mouseRev=\(reverseMouse), trackpadRev=\(reverseTrackpad))")
         return true
+    }
+
+    /// 睡醒/会话切回后 tap 可能被系统拆掉或禁用且不再来事件——加观察者重建 + 看门狗兜底。
+    /// TilingController 有同款防护；此前 ScrollReverser 失效只能靠用户手动“重新检测”。
+    private func installSelfHealing() {
+        guard !selfHealingInstalled else { return }
+        selfHealingInstalled = true
+        let center = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification] {
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                guard let self, self.activeTap != nil else { return }
+                NSLog("ScrollReverser: rebuilding tap after wake/session-active")
+                _ = self.start()
+            }
+        }
+        let t = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
+            guard let self, let tap = self.activeTap else { return }
+            if !CGEvent.tapIsEnabled(tap: tap) {
+                NSLog("ScrollReverser: watchdog found tap disabled — re-enabling")
+                CGEvent.tapEnable(tap: tap, enable: true)
+            }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        watchdog = t
     }
 
     func stop() {
@@ -174,7 +202,7 @@ class ScrollReverser {
             CFMachPortInvalidate(tap)
         }
         if let src = activeRunLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetCurrent(), src, .commonModes)
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .commonModes)
         }
         activeTap = nil
         activeRunLoopSource = nil

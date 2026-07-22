@@ -1,7 +1,5 @@
 import AppKit
-import CoreGraphics
 import Foundation
-import IOKit
 
 // MARK: - Process Helper
 
@@ -36,18 +34,32 @@ enum ErrorLog {
         return dir
     }()
 
+    /// 写入串行化：多线程（含未处理异常回调）同时 log 不会交错损坏行
+    private static let queue = DispatchQueue(label: "com.sz.bento.errorlog")
+    private static let formatter = ISO8601DateFormatter()
+    private static let maxSize = 256 * 1024
+
     static func log(_ message: String) {
         NSLog("%@", message)
-        let line = "[\(ISO8601DateFormatter().string(from: Date()))] \(message)\n"
-        guard let data = line.data(using: .utf8) else { return }
-        let url = directory.appendingPathComponent("error.log")
-        if FileManager.default.fileExists(atPath: url.path),
-           let handle = try? FileHandle(forWritingTo: url) {
-            handle.seekToEndOfFile()
-            handle.write(data)
-            try? handle.close()
-        } else {
-            try? data.write(to: url)
+        queue.async {
+            let line = "[\(formatter.string(from: Date()))] \(message)\n"
+            guard let data = line.data(using: .utf8) else { return }
+            let fm = FileManager.default
+            let url = directory.appendingPathComponent("error.log")
+            // 超上限就滚动到 .1（覆盖旧的），防止反复异常把日志写爆
+            if let size = (try? fm.attributesOfItem(atPath: url.path))?[.size] as? Int, size > maxSize {
+                let rolled = directory.appendingPathComponent("error.log.1")
+                try? fm.removeItem(at: rolled)
+                try? fm.moveItem(at: url, to: rolled)
+            }
+            if fm.fileExists(atPath: url.path),
+               let handle = try? FileHandle(forWritingTo: url) {
+                handle.seekToEndOfFile()
+                handle.write(data)
+                try? handle.close()
+            } else {
+                try? data.write(to: url)
+            }
         }
     }
 }
