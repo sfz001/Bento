@@ -183,19 +183,11 @@ extension LayoutNode: Codable {
 /// 持久化到 ~/Library/Application Support/Bento/config.json
 struct TilingConfig: Codable {
     var masterEnabled = true
-    var doubleClickSnapEnabled = true
-    var dragSnapEnabled = true
-    var dragModifier = DragModifier.command
     /// key = 显示器 UUID（见 DisplayKeys）
     var layouts: [String: LayoutNode] = [:]
 
-    enum DragModifier: String, Codable {
-        case command
-        case control
-    }
-
     private enum CodingKeys: String, CodingKey {
-        case masterEnabled, doubleClickSnapEnabled, dragSnapEnabled, dragModifier, layouts
+        case masterEnabled, layouts
     }
 
     init() {}
@@ -204,9 +196,6 @@ struct TilingConfig: Codable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         masterEnabled = (try? c.decode(Bool.self, forKey: .masterEnabled)) ?? true
-        doubleClickSnapEnabled = (try? c.decode(Bool.self, forKey: .doubleClickSnapEnabled)) ?? true
-        dragSnapEnabled = (try? c.decode(Bool.self, forKey: .dragSnapEnabled)) ?? true
-        dragModifier = (try? c.decode(DragModifier.self, forKey: .dragModifier)) ?? .command
         layouts = (try? c.decode([String: LayoutNode].self, forKey: .layouts)) ?? [:]
     }
 
@@ -895,21 +884,6 @@ class TilingController: NSObject {
         if !v { resetInputState() }
     }
 
-    func setDoubleClickSnap(_ v: Bool) {
-        config.doubleClickSnapEnabled = v
-        config.save()
-    }
-
-    func setDragSnap(_ v: Bool) {
-        config.dragSnapEnabled = v
-        config.save()
-    }
-
-    func setDragModifier(_ m: TilingConfig.DragModifier) {
-        config.dragModifier = m
-        config.save()
-    }
-
     // MARK: 事件处理（event tap 回调，必须极快：默认路径零 AX 调用）
 
     func handleMouse(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
@@ -933,11 +907,11 @@ class TilingController: NSObject {
         }
 
         // 修饰键 + 标题栏按下 → 开始拖动吸附会话（事件不吞，窗口正常跟随系统拖动）
-        if config.dragSnapEnabled, modifierMatches(event) {
+        if modifierMatches(event) {
             beginDragIfOnTitlebar(at: point)
         }
 
-        guard config.doubleClickSnapEnabled, clickState >= 2 else {
+        guard clickState >= 2 else {
             return Unmanaged.passUnretained(event)
         }
 
@@ -996,10 +970,7 @@ class TilingController: NSObject {
     }
 
     private func modifierMatches(_ event: CGEvent) -> Bool {
-        switch config.dragModifier {
-        case .command: return event.flags.contains(.maskCommand)
-        case .control: return event.flags.contains(.maskControl)
-        }
+        event.flags.contains(.maskCommand) // 拖动吸附固定用 ⌘
     }
 
     private func ensurePermission() -> Bool {

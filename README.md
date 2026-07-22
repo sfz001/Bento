@@ -35,7 +35,7 @@ A single app for a grab-bag of small personal utilities. Currently: remote-conne
 #### 3. 分屏（窗口吸附，类似 MaxTo/Moom）
 
 - **双击窗口标题栏**：把窗口放大到它所在的布局格子（与窗口重叠面积最大的格子）；再次双击还原到吸附前位置
-- **修饰键 + 拖动标题栏**（⌘ 或 ⌃ 可选）：显示半透明网格浮层并高亮光标所在格，松手把窗口吸进该格
+- **⌘ + 拖动标题栏**：显示半透明网格浮层并高亮光标所在格，松手把窗口吸进该格
 - 多显示器：每屏独立布局，格子基于 `NSScreen.visibleFrame`（自动排除菜单栏和 Dock）
 - 布局 = 递归二叉分割树；菜单「编辑分屏布局…」在每块真实屏幕盖一层半透明编辑面：点选格子、拖分隔线调比例、右键分割/合并，浮动工具条支持重置此屏/复制到所有屏/保存/取消，Esc 随时取消
 - 配置按显示器 UUID 持久化到 `~/Library/Application Support/Bento/config.json`，重启/插拔显示器不丢布局
@@ -98,7 +98,7 @@ open Bento.app
 #### 3. Window tiling (MaxTo/Moom-style)
 
 - **Double-click a window titlebar**: snaps the window into its layout cell (the cell with the largest overlap); double-click again to restore its previous position
-- **Modifier + drag titlebar** (⌘ or ⌃, selectable): shows a translucent grid overlay with the hovered cell highlighted; release to snap into it
+- **⌘ + drag titlebar**: shows a translucent grid overlay with the hovered cell highlighted; release to snap into it
 - Multi-monitor: each display has its own layout based on `NSScreen.visibleFrame` (menu bar and Dock excluded)
 - Layout = recursive binary-split tree; "编辑分屏布局…" opens a WYSIWYG full-screen editor overlay on every real display: click to select cells, drag dividers, right-click to split/merge, floating toolbar with reset/copy-to-all/save/cancel, Esc cancels anytime
 - Config persists per display UUID in `~/Library/Application Support/Bento/config.json` — survives reboots and display replugging

@@ -25,11 +25,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // 远程熄屏监控开关（默认开）
     private var remoteMonitorItem: NSMenuItem!
     private var tilingMasterItem: NSMenuItem!
-    private var tilingDoubleClickItem: NSMenuItem!
-    private var tilingDragItem: NSMenuItem!
     private var tilingPermissionItem: NSMenuItem!
-    private var tilingModifierCommandItem: NSMenuItem!
-    private var tilingModifierControlItem: NSMenuItem!
     private var tilingPermissionMissing = false
     private var autoLaunchItem: NSMenuItem!
     // 菜单栏图标管理
@@ -85,6 +81,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         remoteMonitorItem.state = remoteMonitorEnabled ? .on : .off
         statusMenu.addItem(remoteMonitorItem)
 
+        // 熄屏模块的手动兜底：把镜像强制拆回扩展桌面（自动恢复失灵时用）
+        restoreDisplaysItem = NSMenuItem(title: "Restore Extended Displays", action: #selector(restoreExtendedDisplays), keyEquivalent: "")
+        restoreDisplaysItem.target = self
+        statusMenu.addItem(restoreDisplaysItem)
+
+        // 远程场景配件：认证重启，跳过 FileVault 开机解锁界面，重启后远程还能连回来
+        let authRestartItem = NSMenuItem(title: "FileVault AuthRestart", action: #selector(authRestart), keyEquivalent: "")
+        authRestartItem.target = self
+        statusMenu.addItem(authRestartItem)
+
         scrollPermissionItem = NSMenuItem(title: "Scroll Permissions Needed", action: nil, keyEquivalent: "")
         scrollPermissionItem.isEnabled = false
         scrollPermissionItem.isHidden = true
@@ -134,30 +140,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         tilingPermissionItem.isHidden = true
         statusMenu.addItem(tilingPermissionItem)
 
+        // 单一总开关：开 = 双击标题栏吸附 + ⌘ 拖动标题栏吸附都可用
         tilingMasterItem = NSMenuItem(title: "启用分屏", action: #selector(toggleTilingMaster), keyEquivalent: "")
         tilingMasterItem.target = self
         statusMenu.addItem(tilingMasterItem)
-
-        tilingDoubleClickItem = NSMenuItem(title: "双击标题栏吸附到格子", action: #selector(toggleTilingDoubleClick), keyEquivalent: "")
-        tilingDoubleClickItem.target = self
-        statusMenu.addItem(tilingDoubleClickItem)
-
-        tilingDragItem = NSMenuItem(title: "修饰键拖动标题栏吸附", action: #selector(toggleTilingDrag), keyEquivalent: "")
-        tilingDragItem.target = self
-        statusMenu.addItem(tilingDragItem)
-
-        let modifierMenu = NSMenu()
-        tilingModifierCommandItem = NSMenuItem(title: "⌘ Command", action: #selector(setTilingModifier(_:)), keyEquivalent: "")
-        tilingModifierCommandItem.target = self
-        tilingModifierCommandItem.representedObject = TilingConfig.DragModifier.command.rawValue
-        modifierMenu.addItem(tilingModifierCommandItem)
-        tilingModifierControlItem = NSMenuItem(title: "⌃ Control", action: #selector(setTilingModifier(_:)), keyEquivalent: "")
-        tilingModifierControlItem.target = self
-        tilingModifierControlItem.representedObject = TilingConfig.DragModifier.control.rawValue
-        modifierMenu.addItem(tilingModifierControlItem)
-        let modifierItem = NSMenuItem(title: "拖动吸附修饰键", action: nil, keyEquivalent: "")
-        modifierItem.submenu = modifierMenu
-        statusMenu.addItem(modifierItem)
 
         let editLayoutsItem = NSMenuItem(title: "编辑分屏布局…", action: #selector(editTilingLayouts), keyEquivalent: "")
         editLayoutsItem.target = self
@@ -170,16 +156,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusMenu.addItem(manageIconsItem)
 
         updateTilingMenuStates()
-
-        restoreDisplaysItem = NSMenuItem(title: "Restore Extended Displays", action: #selector(restoreExtendedDisplays), keyEquivalent: "")
-        restoreDisplaysItem.target = self
-        statusMenu.addItem(restoreDisplaysItem)
-
-        statusMenu.addItem(.separator())
-
-        let authRestartItem = NSMenuItem(title: "FileVault AuthRestart", action: #selector(authRestart), keyEquivalent: "")
-        authRestartItem.target = self
-        statusMenu.addItem(authRestartItem)
 
         statusMenu.addItem(.separator())
 
@@ -302,10 +278,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func updateTilingMenuStates() {
         tilingMasterItem.state = tiling.config.masterEnabled ? .on : .off
-        tilingDoubleClickItem.state = tiling.config.doubleClickSnapEnabled ? .on : .off
-        tilingDragItem.state = tiling.config.dragSnapEnabled ? .on : .off
-        tilingModifierCommandItem.state = tiling.config.dragModifier == .command ? .on : .off
-        tilingModifierControlItem.state = tiling.config.dragModifier == .control ? .on : .off
     }
 
     private func startScrollReverser(showAlert: Bool) {
@@ -427,23 +399,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleTilingMaster() {
         tiling.setMasterEnabled(!tiling.config.masterEnabled)
-        updateTilingMenuStates()
-    }
-
-    @objc private func toggleTilingDoubleClick() {
-        tiling.setDoubleClickSnap(!tiling.config.doubleClickSnapEnabled)
-        updateTilingMenuStates()
-    }
-
-    @objc private func toggleTilingDrag() {
-        tiling.setDragSnap(!tiling.config.dragSnapEnabled)
-        updateTilingMenuStates()
-    }
-
-    @objc private func setTilingModifier(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String,
-              let modifier = TilingConfig.DragModifier(rawValue: raw) else { return }
-        tiling.setDragModifier(modifier)
         updateTilingMenuStates()
     }
 
