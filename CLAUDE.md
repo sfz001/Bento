@@ -15,11 +15,13 @@ The project began as `RustDeskScreenOff` (remote screen-off only) before growing
 ## Build & Run
 
 ```bash
-./build_app.sh       # Compile universal binary (arm64 + x86_64), package .app bundle
-open Bento.app       # Run
+./build_app.sh             # Compile arm64, package .app bundle (icon from Assets/AppIcon.icns)
+./build_app.sh --check     # Seconds-fast typecheck only — no binary, no bundle
+BUILD_UNIVERSAL=1 ./build_app.sh   # arm64 + x86_64 universal binary
+open Bento.app             # Run
 ```
 
-Build requires macOS 14.0+ SDK. Uses `swiftc` directly (no Xcode project/SPM). Frameworks: AppKit, CoreGraphics, IOKit.
+Build requires macOS 14.0+ SDK. Uses `swiftc` directly (no Xcode project/SPM). Frameworks: AppKit, CoreGraphics, IOKit (IOKit is used only by ScrollReverser).
 
 ## Architecture
 

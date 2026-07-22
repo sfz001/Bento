@@ -96,7 +96,18 @@ ensure_local_codesign_identity() {
     ensure_codesign_keychain_visible
 }
 
-echo "Compiling $APP_NAME (Universal Binary)..."
+# --check：秒级类型检查，不编译产物、不打包（改代码时的快速反馈）
+if [ "${1:-}" = "--check" ]; then
+    echo "Type-checking (arm64)..."
+    swiftc "$SCRIPT_DIR"/Sources/*.swift \
+        -typecheck \
+        -target arm64-apple-macosx14.0
+    echo "OK"
+    exit 0
+fi
+
+# 默认只编本机的 arm64（构建时间减半）；需要双架构时 BUILD_UNIVERSAL=1 ./build_app.sh
+echo "Compiling $APP_NAME (arm64)..."
 swiftc "$SCRIPT_DIR"/Sources/*.swift \
     -O \
     -o "$SCRIPT_DIR/${APP_NAME}_arm64" \
@@ -104,24 +115,30 @@ swiftc "$SCRIPT_DIR"/Sources/*.swift \
     -framework AppKit \
     -framework CoreGraphics \
     -framework IOKit
-swiftc "$SCRIPT_DIR"/Sources/*.swift \
-    -O \
-    -o "$SCRIPT_DIR/${APP_NAME}_x86_64" \
-    -target x86_64-apple-macosx14.0 \
-    -framework AppKit \
-    -framework CoreGraphics \
-    -framework IOKit
-lipo -create \
-    "$SCRIPT_DIR/${APP_NAME}_arm64" \
-    "$SCRIPT_DIR/${APP_NAME}_x86_64" \
-    -output "$SCRIPT_DIR/$APP_NAME"
-rm "$SCRIPT_DIR/${APP_NAME}_arm64" "$SCRIPT_DIR/${APP_NAME}_x86_64"
+if [ "${BUILD_UNIVERSAL:-0}" = "1" ]; then
+    echo "Compiling $APP_NAME (x86_64)..."
+    swiftc "$SCRIPT_DIR"/Sources/*.swift \
+        -O \
+        -o "$SCRIPT_DIR/${APP_NAME}_x86_64" \
+        -target x86_64-apple-macosx14.0 \
+        -framework AppKit \
+        -framework CoreGraphics \
+        -framework IOKit
+    lipo -create \
+        "$SCRIPT_DIR/${APP_NAME}_arm64" \
+        "$SCRIPT_DIR/${APP_NAME}_x86_64" \
+        -output "$SCRIPT_DIR/$APP_NAME"
+    rm "$SCRIPT_DIR/${APP_NAME}_arm64" "$SCRIPT_DIR/${APP_NAME}_x86_64"
+else
+    mv "$SCRIPT_DIR/${APP_NAME}_arm64" "$SCRIPT_DIR/$APP_NAME"
+fi
 
 echo "Creating app bundle..."
 rm -rf "$APP_BUNDLE"
-mkdir -p "$APP_BUNDLE/Contents/MacOS"
+mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
 
 mv "$SCRIPT_DIR/$APP_NAME" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
+cp "$SCRIPT_DIR/Assets/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 
 cat > "$APP_BUNDLE/Contents/Info.plist" << 'PLIST_EOF'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -136,6 +153,12 @@ cat > "$APP_BUNDLE/Contents/Info.plist" << 'PLIST_EOF'
     <string>Bento</string>
     <key>CFBundleVersion</key>
     <string>1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>LSUIElement</key>
