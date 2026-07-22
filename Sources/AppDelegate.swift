@@ -85,7 +85,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusMenuItem = NSMenuItem(title: "监控中", action: nil, keyEquivalent: "")
         statusMenu.addItem(statusMenuItem)
 
-        statusMenu.addItem(.separator())
         statusMenu.addItem(.sectionHeader(title: "远程熄屏"))
 
         remoteMonitorItem = makeItem("远程连接自动熄屏", symbol: "eye.slash", action: #selector(toggleRemoteMonitor))
@@ -98,7 +97,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 远程场景配件：认证重启，跳过 FileVault 开机解锁界面，重启后远程还能连回来
         statusMenu.addItem(makeItem("FileVault 免密重启", symbol: "lock.rotation", action: #selector(authRestart)))
 
-        statusMenu.addItem(.separator())
         statusMenu.addItem(.sectionHeader(title: "滚动方向"))
 
         reverseMouseItem = makeItem("反转鼠标滚动", symbol: "computermouse", action: #selector(toggleReverseMouse))
@@ -126,7 +124,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         retryScrollPermissionsItem.isHidden = true
         statusMenu.addItem(retryScrollPermissionsItem)
 
-        statusMenu.addItem(.separator())
         statusMenu.addItem(.sectionHeader(title: "分屏（窗口吸附）"))
 
         tilingPermissionItem = makeItem("分屏需要辅助功能权限（点击打开设置）", symbol: "exclamationmark.triangle", action: #selector(openAccessibilitySettings))
@@ -139,7 +136,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusMenu.addItem(makeItem("编辑分屏布局…", symbol: "squareshape.split.2x2.dotted", action: #selector(editTilingLayouts)))
 
-        statusMenu.addItem(.separator())
         statusMenu.addItem(.sectionHeader(title: "菜单栏图标"))
 
         statusMenu.addItem(makeItem("管理菜单栏图标…", symbol: "menubar.rectangle", action: #selector(openIconManager)))
@@ -347,6 +343,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func quitApp() {
+        iconMgr.prepareForQuit() // 主动退出（可能要卸载）：隐藏图标写回可见区
         NSApplication.shared.terminate(nil)
     }
 

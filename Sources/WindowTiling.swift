@@ -941,10 +941,10 @@ class TilingController: NSObject {
             return Unmanaged.passUnretained(event)
         }
 
-        // 红绿灯按钮区（窗口左上 ~70pt）不参与双击吸附：双击关闭/最小化的第二击
-        // 必须原样到达 App——按钮的多击跟踪要等最后一个抬起才触发动作，吞掉它
-        // 会导致"点击关闭没反应"，窗口反而被吸附走
-        guard point.x > hit.bounds.minX + 70 else {
+        // 红绿灯按钮区（窗口左上 ~80pt；zoom 右缘实测可到 ~68pt，留足余量）不参与
+        // 双击吸附：双击关闭/最小化/缩放的第二击必须原样到达 App——按钮的多击跟踪
+        // 要等最后一个抬起才触发动作，吞掉它会导致"点击没反应"，窗口反而被吸附走
+        guard point.x > hit.bounds.minX + 80 else {
             return Unmanaged.passUnretained(event)
         }
 

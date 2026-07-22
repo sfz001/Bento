@@ -11,7 +11,8 @@ guard duplicateInstances.isEmpty else { exit(0) }
 
 // 未处理异常写日志，便于事后排查
 NSSetUncaughtExceptionHandler { exception in
-    ErrorLog.log("未处理异常 \(exception.name.rawValue): \(exception.reason ?? "")\n"
+    // 必须同步写：处理器返回后进程就 abort，异步队列块来不及落盘
+    ErrorLog.logSync("未处理异常 \(exception.name.rawValue): \(exception.reason ?? "")\n"
         + exception.callStackSymbols.joined(separator: "\n"))
 }
 

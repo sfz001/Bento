@@ -39,27 +39,35 @@ enum ErrorLog {
     private static let formatter = ISO8601DateFormatter()
     private static let maxSize = 256 * 1024
 
+    /// 崩溃路径专用：同步写盘。异常处理器 log 完进程就死，异步队列块会来不及执行
+    static func logSync(_ message: String) {
+        NSLog("%@", message)
+        queue.sync { write(message) }
+    }
+
     static func log(_ message: String) {
         NSLog("%@", message)
-        queue.async {
-            let line = "[\(formatter.string(from: Date()))] \(message)\n"
-            guard let data = line.data(using: .utf8) else { return }
-            let fm = FileManager.default
-            let url = directory.appendingPathComponent("error.log")
-            // 超上限就滚动到 .1（覆盖旧的），防止反复异常把日志写爆
-            if let size = (try? fm.attributesOfItem(atPath: url.path))?[.size] as? Int, size > maxSize {
-                let rolled = directory.appendingPathComponent("error.log.1")
-                try? fm.removeItem(at: rolled)
-                try? fm.moveItem(at: url, to: rolled)
-            }
-            if fm.fileExists(atPath: url.path),
-               let handle = try? FileHandle(forWritingTo: url) {
-                handle.seekToEndOfFile()
-                handle.write(data)
-                try? handle.close()
-            } else {
-                try? data.write(to: url)
-            }
+        queue.async { write(message) }
+    }
+
+    private static func write(_ message: String) {
+        let line = "[\(formatter.string(from: Date()))] \(message)\n"
+        guard let data = line.data(using: .utf8) else { return }
+        let fm = FileManager.default
+        let url = directory.appendingPathComponent("error.log")
+        // 超上限就滚动到 .1（覆盖旧的），防止反复异常把日志写爆
+        if let size = (try? fm.attributesOfItem(atPath: url.path))?[.size] as? Int, size > maxSize {
+            let rolled = directory.appendingPathComponent("error.log.1")
+            try? fm.removeItem(at: rolled)
+            try? fm.moveItem(at: url, to: rolled)
+        }
+        if fm.fileExists(atPath: url.path),
+           let handle = try? FileHandle(forWritingTo: url) {
+            handle.seekToEndOfFile()
+            handle.write(data)
+            try? handle.close()
+        } else {
+            try? data.write(to: url)
         }
     }
 }

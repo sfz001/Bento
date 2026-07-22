@@ -68,6 +68,9 @@ class MenuBarIconManager: NSObject {
     private var extrasPIDs = Set<pid_t>()
     /// bundleID → CFBundleName 缓存（读 bundle 是磁盘操作）
     private var bundleNameCache: [String: String] = [:]
+    /// 键 → 最近一次解析出的条目键（退出恢复用）；配对失败只记一次日志
+    private var lastEntryKeys: [String: [String]] = [:]
+    private var loggedPairingIssues = Set<String>()
     /// 管理界面数据（主线程发布）
     fileprivate(set) var rows: [Row] = []
     /// 列表更新回调（在主线程调用）
@@ -102,11 +105,14 @@ class MenuBarIconManager: NSObject {
         CFPreferencesAppSynchronize(mbaPrefDomain)
     }
 
-    /// 自家状态栏项在 agent 字典里的候选键（签名标识可能是 bundleID 或可执行名，两种都管）
-    private func ownEntryKeys(_ autosave: String) -> [String] {
-        var out = ["status:\(ProcessInfo.processInfo.processName)::\(autosave)"]
-        if let bid = Bundle.main.bundleIdentifier { out.append("status:\(bid)::\(autosave)") }
-        return out
+    /// 自家状态栏项在 agent 字典里的条目键：先认字典里现存的候选；都不存在时只写
+    /// 可执行名前缀（实测：agent 对 ad-hoc 签名用可执行名 "Bento"，bundleID 变体
+    /// 它永不消费且会在自己的整体重写时丢弃——别再制造幻影键）
+    private func ownEntryKeys(_ autosave: String, positions: [String: Double]) -> [String] {
+        var candidates = ["status:\(ProcessInfo.processInfo.processName)::\(autosave)"]
+        if let bid = Bundle.main.bundleIdentifier { candidates.append("status:\(bid)::\(autosave)") }
+        let existing = candidates.filter { positions[$0] != nil }
+        return existing.isEmpty ? [candidates[0]] : existing
     }
 
     // MARK: 图标枚举与身份识别（后台线程）
@@ -155,8 +161,9 @@ class MenuBarIconManager: NSObject {
     /// 60s 兜底全量轮传 true，覆盖“App 启动很久后才创建图标”的场景
     private func enumerateItems(positions: [String: Double],
                                 runningApps: [NSRunningApplication],
-                                fullProbe: Bool) -> [LiveItem] {
+                                fullProbe: Bool) -> (items: [LiveItem], junkKeys: [String]) {
         var out: [LiveItem] = []
+        var junk: [String] = []
         let myPID = ProcessInfo.processInfo.processIdentifier
         var alivePIDs = Set<pid_t>()
         for app in runningApps {
@@ -188,14 +195,39 @@ class MenuBarIconManager: NSObject {
             if !cfName.isEmpty, cfName != bundleID {
                 prefixes.append("status:\(cfName)::")
             }
-            // 该 App 现有条目数与图标数一致时按序配对（覆盖 "Siri"/"Item-1" 这类非默认 autosaveName）
-            let existing = positions.keys.filter { k in prefixes.contains { k.hasPrefix($0) } }.sorted()
+            // 选定生效前缀：哪个前缀在字典里有条目用哪个（都有则取 bundleID——正规签名
+            // App 的规范前缀），另一个前缀的条目是幻影键，标记清除；都没有时用 bundleID
+            // 合成（几乎所有第三方菜单栏 App 都是正规签名）。原则：宁可不写，不写错键
+            let byPrefix = prefixes.map { pf in (pf, positions.keys.filter { $0.hasPrefix(pf) }.sorted()) }
+            let active = byPrefix.first(where: { !$0.1.isEmpty }) ?? (prefixes[0], [])
+            for (pf, keys) in byPrefix where pf != active.0 && !keys.isEmpty {
+                junk.append(contentsOf: keys)
+            }
+            let existing = active.1
             for (idx, extra) in items.enumerated() {
                 let human = !extra.title.isEmpty ? extra.title : (!extra.desc.isEmpty ? extra.desc : appName)
                 let name = human == appName ? human : "\(appName) · \(human)"
-                let entryKeys = existing.count == items.count
-                    ? [existing[idx]]
-                    : prefixes.map { $0 + "Item-\(idx)" }
+                // 配对阶梯：唯一现存键直配 → 数量相等按序配 → 数量不等按 Item-N 序号配，
+                // 配不上就跳过写入并记一次日志 → 无现存键才合成
+                let entryKeys: [String]
+                if existing.count == 1, items.count == 1 {
+                    entryKeys = [existing[0]]
+                } else if existing.count == items.count {
+                    entryKeys = [existing[idx]]
+                } else if !existing.isEmpty {
+                    let numbered = "\(active.0)Item-\(idx)"
+                    if existing.contains(numbered) {
+                        entryKeys = [numbered]
+                    } else {
+                        entryKeys = []
+                        if !loggedPairingIssues.contains(bundleID) {
+                            loggedPairingIssues.insert(bundleID)
+                            ErrorLog.log("图标管理: \(appName) 键配对失败（现有 \(existing.count) 键 vs \(items.count) 图标），跳过写入")
+                        }
+                    }
+                } else {
+                    entryKeys = ["\(active.0)Item-\(idx)"]
+                }
                 out.append(LiveItem(key: "\(bundleID)|\(idx + 1)", displayName: name,
                                     stableName: appName, entryKeys: entryKeys))
             }
@@ -203,7 +235,7 @@ class MenuBarIconManager: NSObject {
         // 只保留还活着的 pid，防止长时间运行后集合无限膨胀（pid 会被系统复用）
         probedPIDs.formIntersection(alivePIDs)
         extrasPIDs.formIntersection(alivePIDs)
-        return out
+        return (out, junk)
     }
 
     /// 系统模块 AX id → agent 字典键名（已知映射；其余用去前缀首字母大写兜底）
@@ -295,12 +327,14 @@ class MenuBarIconManager: NSObject {
         guard force || stale || signature != lastSignature else { return }
         lastFullPass = Date()
 
-        var items = enumerateItems(positions: positions, runningApps: runningApps, fullProbe: stale)
+        let (thirdParty, junkKeys) = enumerateItems(positions: positions, runningApps: runningApps, fullProbe: stale)
+        var items = thirdParty
         items += enumerateModules(positions: positions, mbaApp: mbaApp)
         // Bento 本尊也作为一行参与排序（不可隐藏，setRowHidden 与采纳都有防御）
         items.append(LiveItem(key: "bento:main", displayName: "Bento", stableName: "Bento",
-                              entryKeys: ownEntryKeys("BentoMain")))
+                              entryKeys: ownEntryKeys("BentoMain", positions: positions)))
         let byKey = Dictionary(uniqueKeysWithValues: items.map { ($0.key, $0) })
+        for item in items where !item.entryKeys.isEmpty { lastEntryKeys[item.key] = item.entryKeys }
         if hiddenKeys.contains("bento:main") { hiddenKeys.remove("bento:main") }
 
         // —— 布局参数（数值只有相对意义）：统一网格 base+8i 覆盖第三方与系统模块；
@@ -367,37 +401,44 @@ class MenuBarIconManager: NSObject {
         // —— 语义校验：只在“该隐没隐/该显没显/顺序不对/条目缺失/没钉住”时才回写，
         //    数值上的细微差异不管（agent 可能改写数值，逐字节强求会互写打架）。
         //    启动时状态通常已正确 → 不写 → 避免每次启动都让 agent 重排菜单栏
-        var writeNeeded = false
+        // 配对失败（entryKeys 为空）的项旁观语义校验：写不进正确的键，别拿它反复置位
+        var writeReasons: [String] = []
         for key in visibleList {
-            let pos = currentPos(of: byKey[key]!, in: positions)
-            if pos == nil || pos! > hiddenThreshold { writeNeeded = true }
+            guard let item = byKey[key], !item.entryKeys.isEmpty else { continue }
+            let pos = currentPos(of: item, in: positions)
+            if pos == nil { writeReasons.append("\(key) 缺条目") }
+            else if pos! > hiddenThreshold { writeReasons.append("\(key) 该显未显") }
         }
         for key in hiddenList {
-            let pos = currentPos(of: byKey[key]!, in: positions)
-            if pos == nil || pos! <= hiddenThreshold { writeNeeded = true }
+            guard let item = byKey[key], !item.entryKeys.isEmpty else { continue }
+            let pos = currentPos(of: item, in: positions)
+            if pos == nil || pos! <= hiddenThreshold { writeReasons.append("\(key) 该隐未隐") }
         }
         let currentVisibleOrder = visibleList
             .compactMap { k in currentPos(of: byKey[k]!, in: positions).map { (k, $0) } }
             .sorted { $0.1 > $1.1 }.map(\.0)
         if currentVisibleOrder != visibleList.filter({ k in
             currentPos(of: byKey[k]!, in: positions) != nil
-        }) { writeNeeded = true }
+        }) { writeReasons.append("可见顺序不符") }
+        if !junkKeys.isEmpty { writeReasons.append("清理幻影键 \(junkKeys.count) 个") }
 
         var finalPositions = positions
-        if writeNeeded {
+        if !writeReasons.isEmpty {
             for entry in desired {
                 for k in entry.keys {
                     raw[k] = entry.pos
                     finalPositions[k] = entry.pos
                 }
             }
-            // 清掉历史方案的旧条目（默认 autosaveName 时代 + 已废弃的 hider）
+            // 清掉历史方案的旧条目 + 本轮识别出的幻影键（agent 永不消费的前缀变体）
             for legacy in ["status:Bento::Item-0", "status:Bento::Item-1",
-                           "status:Bento::BentoHider", "status:com.sz.bento::BentoHider"] {
+                           "status:Bento::BentoHider", "status:com.sz.bento::BentoHider",
+                           "status:com.sz.bento::BentoMain"] + junkKeys {
                 raw.removeValue(forKey: legacy)
                 finalPositions.removeValue(forKey: legacy)
             }
             writeRawPositions(raw)
+            ErrorLog.log("图标管理: 回写字典（\(writeReasons.joined(separator: "、"))）")
         }
         // 签名以回写后的字典为准，别把自己的写入当成下一轮的外部变化
         var finalHasher = Hasher()
@@ -416,6 +457,9 @@ class MenuBarIconManager: NSObject {
 
     /// 溢出区展开态的 chevron（»，desc = "Double forward chevron"）存在时，点它一下收起。
     /// 这是本模块仅剩的合成事件：单次点击、目标是系统自己的收起按钮，无拖拽风险。
+    /// 溢出区展开态的 chevron（»，desc = "Double forward chevron"）存在时，点它一下收起。
+    /// AXPress 不可用（实测 chevron 及其祖先链全部无 AXPress 动作，返回 -25206），
+    /// 只能坐标点击；点击前校验 frame 合法性，防止 AX 鬼影坐标误点到别的图标。
     private func collapseChevronIfExpanded() {
         guard let mba = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.MenuBarAgent").first
         else { return }
@@ -445,6 +489,12 @@ class MenuBarIconManager: NSObject {
                                       kAXWindowsAttribute as CFString, &windows)
         for w in windows as? [AXUIElement] ?? [] { walk(w, 0) }
         guard let chevron else { return } // 没展开，无事可做
+        // frame 合法性：chevron 是菜单栏里 ~18x30 的小图形，越界/离谱的都是鬼影，不点
+        guard chevron.width > 8, chevron.width < 48, chevron.height < 48,
+              chevron.minY >= 0, chevron.maxY <= 44 else {
+            ErrorLog.log("图标管理: chevron frame 异常 \(chevron)，放弃收起点击")
+            return
+        }
         let saved = CGEvent(source: nil)?.location
         let p = CGPoint(x: chevron.midX, y: chevron.midY)
         let src = CGEventSource(stateID: .hidSystemState)
@@ -452,6 +502,7 @@ class MenuBarIconManager: NSObject {
         usleep(60_000)
         CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: p, mouseButton: .left)?.post(tap: .cghidEventTap)
         if let saved { CGWarpMouseCursorPosition(saved) }
+        ErrorLog.log("图标管理: 已点击收起展开的溢出区")
     }
 
     private func publishRows(byKey: [String: LiveItem]) {
@@ -470,6 +521,28 @@ class MenuBarIconManager: NSObject {
             guard self.rows != newRows else { return }
             self.rows = newRows
             self.onRowsChanged?()
+        }
+    }
+
+    // MARK: 退出恢复（仅菜单主动退出时调用）
+
+    /// 把隐藏项写回可见网格：用户主动退出（可能是要卸载）后图标不再沉在溢出区。
+    /// hiddenKeys 保留——下次启动会重新隐藏，语义不变。
+    /// 不放 applicationWillTerminate：重启/关机也会走那里，每次都制造 agent 重写扰动。
+    func prepareForQuit() {
+        queue.sync {
+            guard !hiddenKeys.isEmpty else { return }
+            var raw = readRawPositions()
+            var moved = 0
+            for (i, key) in hiddenKeys.enumerated() {
+                for entryKey in lastEntryKeys[key] ?? [] where raw[entryKey] != nil {
+                    raw[entryKey] = 500.0 + Double(i) * 8 // 可见区左端，一次性值，重启会重排
+                    moved += 1
+                }
+            }
+            guard moved > 0 else { return }
+            writeRawPositions(raw)
+            ErrorLog.log("图标管理: 退出前已把 \(moved) 个隐藏条目写回可见区")
         }
     }
 
@@ -579,8 +652,18 @@ class MenuBarIconManager: NSObject {
         queue.async { self.enforce(force: true) }
     }
 
-    /// 行图标：第三方用应用图标，系统模块/本尊用 SF Symbol
+    /// 行图标：第三方用应用图标，系统模块/本尊用 SF Symbol。
+    /// 按键缓存——App 图标会话内不变，别每次 reloadData 都走磁盘查询
+    private var rowIconCache: [String: NSImage] = [:]
+
     private func rowIcon(for key: String) -> NSImage? {
+        if let cached = rowIconCache[key] { return cached }
+        let icon = resolveRowIcon(for: key)
+        if let icon { rowIconCache[key] = icon }
+        return icon
+    }
+
+    private func resolveRowIcon(for key: String) -> NSImage? {
         if key == "bento:main" {
             return NSImage(systemSymbolName: "eye", accessibilityDescription: nil)
         }
@@ -591,6 +674,7 @@ class MenuBarIconManager: NSObject {
             else if name.hasPrefix("WiFi") { symbol = "wifi" }
             else if name.hasPrefix("UserSwitcher") { symbol = "person.crop.circle" }
             else if name.hasPrefix("Sound") { symbol = "speaker.wave.2" }
+            else if name.hasPrefix("NowPlaying") { symbol = "play.circle" }
             else { symbol = "gearshape" }
             return NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         }
