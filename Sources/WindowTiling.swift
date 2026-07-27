@@ -143,7 +143,10 @@ extension LayoutNode: Codable {
     /// 防御式解析：字段缺失/损坏一律回退安全值，绝不让整棵树解析失败
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        let type = try c.decode(String.self, forKey: .type)
+        // type 也得用 try?：这是根节点唯一会抛的字段，而 TilingConfig 对 layouts 是
+        // 整体 try? 兜底 —— 单个显示器条目的 type 坏掉会让**所有**显示器的布局
+        // 一起静默清空（且吞掉错误不写日志）。坏字段回退成普通格子，只影响它自己
+        let type = (try? c.decode(String.self, forKey: .type)) ?? "cell"
         switch type {
         case "cell":
             self = .cell
@@ -191,11 +194,23 @@ struct TilingConfig: Codable {
 
     init() {}
 
+    /// 单条目宽容解码的包装：某个显示器的布局值损坏（不是对象等）只丢那一条，
+    /// 不让整个字典解码失败把所有屏的布局清空
+    private struct TolerantNode: Decodable {
+        let node: LayoutNode?
+        init(from decoder: Decoder) throws { node = try? LayoutNode(from: decoder) }
+    }
+
     /// 防御式解析：任何字段缺失/类型错误都回退默认值，绝不抛异常
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         masterEnabled = (try? c.decode(Bool.self, forKey: .masterEnabled)) ?? true
-        layouts = (try? c.decode([String: LayoutNode].self, forKey: .layouts)) ?? [:]
+        let tolerant = (try? c.decode([String: TolerantNode].self, forKey: .layouts)) ?? [:]
+        let bad = tolerant.filter { $0.value.node == nil }.keys.sorted()
+        if !bad.isEmpty {
+            ErrorLog.log("分屏配置: 丢弃损坏的布局条目 \(bad)")
+        }
+        layouts = tolerant.compactMapValues(\.node)
     }
 
     static var configURL: URL { ErrorLog.directory.appendingPathComponent("config.json") }
@@ -214,8 +229,16 @@ struct TilingConfig: Codable {
     func save() {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? encoder.encode(self) else { return }
-        try? data.write(to: TilingConfig.configURL, options: .atomic)
+        guard let data = try? encoder.encode(self) else {
+            ErrorLog.log("分屏配置编码失败，未保存")
+            return
+        }
+        do {
+            try data.write(to: TilingConfig.configURL, options: .atomic)
+        } catch {
+            // 磁盘满/权限问题静默吞掉的话，用户以为保存成功、重启后布局回退
+            ErrorLog.log("分屏配置保存失败: \(error.localizedDescription)")
+        }
     }
 }
 
@@ -291,6 +314,13 @@ class WindowManager {
         windowsCache = result
         windowsCacheAt = Date()
         return result
+    }
+
+    /// 全部窗口 ID（含其它 Space / 最小化的）：还原记忆判活专用，不走 80ms 缓存
+    func allWindowIDs() -> Set<CGWindowID> {
+        guard let list = CGWindowListCopyWindowInfo([.excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+        else { return [] }
+        return Set(list.compactMap { $0[kCGWindowNumber as String] as? CGWindowID })
     }
 
     /// 零成本几何预过滤：点是否落在某窗口顶部标题栏高度带内（纯窗口列表几何判断，不做 AX 调用）
@@ -392,7 +422,11 @@ class WindowManager {
         var sizeValue: AnyObject?
         guard AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &posValue) == .success,
               AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeValue) == .success,
-              let posRef = posValue, let sizeRef = sizeValue
+              let posRef = posValue, let sizeRef = sizeValue,
+              // 外部 App 的 AX 树不可信：自绘窗口（Electron/Java）可能对这些属性
+              // 返回非 AXValue 的东西，不查类型直接强转就是给别人送崩溃
+              CFGetTypeID(posRef) == AXValueGetTypeID(),
+              CFGetTypeID(sizeRef) == AXValueGetTypeID()
         else { return nil }
         var pos = CGPoint.zero
         var size = CGSize.zero
@@ -868,6 +902,8 @@ class TilingController: NSObject {
     private var drag: DragSnapSession?
     private var overlays: [String: GridOverlayWindow] = [:] // key = 显示器 UUID
     private var editor: LayoutEditorSession?
+    /// tap 创建失败已记过日志（恢复时复位并记恢复）
+    private var loggedTapFailure = false
 
     // MARK: 生命周期
 
@@ -921,8 +957,17 @@ class TilingController: NSObject {
             callback: tilingEventCallback,
             userInfo: userInfo
         ) else {
-            ErrorLog.log("分屏: 鼠标事件 tap 创建失败")
+            // 只在失败态翻转时记一次：watchdog 每 2s 重试，无权限时逐次记日志
+            // 是每分钟 30 条，256KB 滚动上限下会把别的模块的真错误冲掉
+            if !loggedTapFailure {
+                loggedTapFailure = true
+                ErrorLog.log("分屏: 鼠标事件 tap 创建失败（多为缺辅助功能权限；恢复前不再重复记录）")
+            }
             return
+        }
+        if loggedTapFailure {
+            loggedTapFailure = false
+            ErrorLog.log("分屏: 鼠标事件 tap 已恢复")
         }
         let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, port, 0)
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
@@ -1163,7 +1208,9 @@ class TilingController: NSObject {
     // MARK: AX 负缓存
 
     private func negCacheKey(_ p: CGPoint) -> String {
-        "\(Int(p.x / 8)):\(Int(p.y / 8))" // 8px 网格量化，避免轻微移动击穿缓存
+        // 合成事件可以带 NaN/inf 坐标，Int(非有限 Double) 直接 trap
+        guard p.x.isFinite, p.y.isFinite else { return "nonfinite" }
+        return "\(Int(p.x / 8)):\(Int(p.y / 8))" // 8px 网格量化，避免轻微移动击穿缓存
     }
 
     private func isAxNegativeCached(_ p: CGPoint) -> Bool {
@@ -1184,8 +1231,16 @@ class TilingController: NSObject {
         // 已处于上次吸附后的实际位置 → 还原（判断用吸附后实际 frame，兼容有最小尺寸限制的窗口）
         if let rec = snapMemory[id], current.approxEquals(rec.snapped, tolerance: 4) {
             dlog("还原到 \(rec.original)")
-            windowMgr.setFrame(window, to: clampedToCurrentScreens(rec.original))
-            snapMemory.removeValue(forKey: id)
+            let target = clampedToCurrentScreens(rec.original)
+            let result = windowMgr.setFrame(window, to: target)
+            // 「读到 frame」≠「写入生效」：到达目标附近，或至少离开了吸附位
+            //（App 按最小尺寸等自身约束钳制过）才算还原完成；读回 nil 或纹丝不动
+            // 说明写入被拒——保留记忆，下次双击还能再试
+            if let result, result.approxEquals(target, tolerance: 8) || !result.approxEquals(rec.snapped, tolerance: 4) {
+                snapMemory.removeValue(forKey: id)
+            } else {
+                dlog("还原写入未生效，保留记忆")
+            }
             return
         }
         // 所在格子 = 与窗口当前可见边界重叠面积最大的格子；无重叠时取光标所在格子
@@ -1276,9 +1331,12 @@ class TilingController: NSObject {
         return dx + dy
     }
 
-    /// 清理已失效窗口句柄和 30 分钟未用的记忆条目
+    /// 清理已失效窗口句柄和 30 分钟未用的记忆条目。
+    /// 判活必须用全量窗口列表：onScreenOnly 会把「只是切去了别的 Space」的窗口
+    /// 当成已关闭，用户切走待一分钟回来，吸附还原记忆就被误删了
     private func cleanSnapMemory() {
-        let alive = Set(windowMgr.onScreenWindows().map { $0.id })
+        let alive = windowMgr.allWindowIDs()
+        guard !alive.isEmpty else { return } // 枚举失败别当成全部窗口都关了
         let cutoff = Date().addingTimeInterval(-1800)
         snapMemory = snapMemory.filter { alive.contains($0.key) && $0.value.lastUsed > cutoff }
     }

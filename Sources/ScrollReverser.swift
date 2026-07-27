@@ -45,18 +45,20 @@ private func reverseScrollDeltas(_ event: CGEvent) {
     let hidX = hidEvent.map { IOHIDEventGetFloatValue($0, ioHIDEventFieldScrollX) } ?? 0
     let hidY = hidEvent.map { IOHIDEventGetFloatValue($0, ioHIDEventFieldScrollY) } ?? 0
 
-    event.setIntegerValueField(.scrollWheelEventDeltaAxis1, value: -d1)
-    event.setIntegerValueField(.scrollWheelEventDeltaAxis2, value: -d2)
-    event.setIntegerValueField(.scrollWheelEventDeltaAxis3, value: -d3)
+    // 0 &- x 而非 -x：这是 session tap，任何本地进程都能投递 delta = Int64.min
+    // 的合成滚轮事件，一元取负直接溢出 trap；&- 对 .min 取负仍是 .min，滚动怪但不崩
+    event.setIntegerValueField(.scrollWheelEventDeltaAxis1, value: 0 &- d1)
+    event.setIntegerValueField(.scrollWheelEventDeltaAxis2, value: 0 &- d2)
+    event.setIntegerValueField(.scrollWheelEventDeltaAxis3, value: 0 &- d3)
 
     event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: -f1)
     event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: -f2)
     event.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis3, value: -f3)
 
     // Set point deltas last; setting line deltas can cause macOS to recalculate them.
-    event.setIntegerValueField(.scrollWheelEventPointDeltaAxis1, value: -p1)
-    event.setIntegerValueField(.scrollWheelEventPointDeltaAxis2, value: -p2)
-    event.setIntegerValueField(.scrollWheelEventPointDeltaAxis3, value: -p3)
+    event.setIntegerValueField(.scrollWheelEventPointDeltaAxis1, value: 0 &- p1)
+    event.setIntegerValueField(.scrollWheelEventPointDeltaAxis2, value: 0 &- p2)
+    event.setIntegerValueField(.scrollWheelEventPointDeltaAxis3, value: 0 &- p3)
 
     if let hidEvent = hidEvent {
         IOHIDEventSetFloatValue(hidEvent, ioHIDEventFieldScrollX, -hidX)
@@ -125,6 +127,11 @@ class ScrollReverser {
     private var selfHealingInstalled = false
     private var watchdog: Timer?
 
+    /// 唤醒后自愈重建失败时回调（主线程）。start() 开头会先 stop() 拆掉旧 tap，
+    /// 重建再失败就等于滚动反转彻底停摆 —— 不上报的话菜单还显示一切正常，
+    /// 用户只会觉得"某次睡醒后滚动方向莫名其妙变回去了"
+    var onTapRebuildFailed: (() -> Void)?
+
     var reverseTrackpad: Bool {
         get { cachedReverseTrackpad }
         set {
@@ -182,7 +189,10 @@ class ScrollReverser {
             center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 guard let self, self.activeTap != nil else { return }
                 NSLog("ScrollReverser: rebuilding tap after wake/session-active")
-                _ = self.start()
+                if !self.start() {
+                    ErrorLog.log("滚动反转: 唤醒后重建 event tap 失败，功能已停用")
+                    self.onTapRebuildFailed?()
+                }
             }
         }
         let t = Timer(timeInterval: 5, repeats: true) { [weak self] _ in

@@ -145,9 +145,11 @@ final class SleepGuard {
     private func restart() {
         let keepDeadline = deadline
         let keepMinutes = sessionMinutes
-        // 已过期就直接收工，否则会造出一个 1 秒断言、随即冒出「到期自动停止」日志
+        // 已过期就直接收工，否则会造出一个 1 秒断言、随即冒出「到期自动停止」日志。
+        // 走 handleExpiry 而非 stop()：deadline 已过 = powerd 的超时释放多半已经
+        // 发生，必须判活后再决定是否本地 Release（同 reconcile / 到期定时器路径）
         if let keepDeadline, keepDeadline <= Date() {
-            stop()
+            handleExpiry()
             return
         }
         stopInternal(notify: false)
@@ -208,6 +210,16 @@ final class SleepGuard {
         if notify { notifyChanged() }
     }
 
+    /// 到期收工。powerd 那侧的 TimeoutActionRelease 和这个墙钟定时器指向同一时刻，
+    /// 谁先落地不确定 —— 所以先问一次断言还在不在：已被 powerd 释放就绝不能再
+    /// Release 一次（IOPMAssertionID 是会被复用的句柄，对着死 ID 释放可能误杀
+    /// 别人的断言）。与 reconcile 用的是同一套判活方式
+    private func handleExpiry() {
+        guard isActive else { return }
+        let stillAlive = IOPMAssertionCopyProperties(assertionID)?.takeRetainedValue() != nil
+        stopInternal(notify: true, release: stillAlive)
+    }
+
     deinit { if isActive { IOPMAssertionRelease(assertionID) } }
 
     // MARK: 定时器（一律墙钟）
@@ -222,7 +234,7 @@ final class SleepGuard {
             t.schedule(wallDeadline: .now() + max(0, deadline.timeIntervalSinceNow), leeway: .seconds(1))
             t.setEventHandler { [weak self] in
                 ErrorLog.log("防睡: 到期自动停止")
-                self?.stop()
+                self?.handleExpiry()
             }
             t.activate() // 必须 activate，否则静默不跑
             expiryTimer = t
@@ -262,7 +274,10 @@ final class SleepGuard {
         guard isActive else { return }
         if let deadline, Date() >= deadline {
             ErrorLog.log("防睡: 唤醒后发现已过期，停止")
-            stop()
+            // 走 handleExpiry 而非 stop()：deadline 已过意味着 powerd 的
+            // TimeoutActionRelease 几乎必然已经释放过了，这里恰是全文件
+            // 最容易撞上「对死 ID 再 Release」的路径，必须先判活
+            handleExpiry()
             return
         }
         if IOPMAssertionCopyProperties(assertionID)?.takeRetainedValue() == nil {
@@ -309,7 +324,9 @@ final class SleepGuard {
                   let mx = d[kIOPSMaxCapacityKey] as? Int, mx > 0
             else { continue }
             let onAC = (d[kIOPSPowerSourceStateKey] as? String) == kIOPSACPowerValue
-            return (max(0, min(100, Int((Double(cur) / Double(mx) * 100).rounded()))), onAC)
+            // 先在 Double 域钳制再转 Int：IOKit 报出离谱容量时 Int(超界 Double) 会 trap
+            let pct = (Double(cur) / Double(mx) * 100).rounded()
+            return (Int(min(100, max(0, pct))), onAC)
         }
         return nil
     }
@@ -733,7 +750,9 @@ final class SleepGuardSettingsWindow: NSObject, NSWindowDelegate, NSTextFieldDel
 
     @objc private func batteryChanged() {
         let choices = SleepGuard.batteryStopChoices
-        guardRef?.batteryStopPercent = choices[min(batteryPopup.indexOfSelectedItem, choices.count - 1)]
+        // indexOfSelectedItem 无选中时是 -1，两头都要钳
+        let index = max(0, min(batteryPopup.indexOfSelectedItem, choices.count - 1))
+        guardRef?.batteryStopPercent = choices[index]
     }
 
     @objc private func actionPressed() {

@@ -47,12 +47,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // 先收拾上次非正常退出留下的分辨率/Dock 残留，再启动轮询：
+        // 首轮轮询若真的检测到连接，它会在恢复后的干净状态上重新取快照
+        screenCtl.recoverFromUncleanExit()
         setupStatusBar()
         installAutoLaunchIfFirstRun()
         startScrollReverser(showAlert: true)
         startTiling()
         iconMgr.start()
         sleepGuard.onStateChange = { [weak self] in self?.refreshSleepGuardState() }
+        // 远程会话中热插显示器：新屏是正常 gamma、不在镜像组，会直接亮出真实桌面。
+        // 拓扑一变就重新镜像（快照有「不覆盖」规则，不会污染断开时的还原目标；
+        // 快照里没有新屏的条目，恢复时它会被正确地拆出镜像）并对全部在线屏重压 gamma
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.reassertScreenOffState()
+        }
+        // 唤醒也要重压：部分机型睡眠会重置 gamma 表，而单内屏 MacBook 的唤醒
+        // 不保证触发 didChangeScreenParameters——两个通道都挂，处理幂等
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.reassertScreenOffState()
+        }
         if remoteMonitorEnabled { startPollTimer() }
     }
 
@@ -65,6 +83,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         screenCtl.restoreResolution()
         screenCtl.restoreDock()
         screenCtl.disableMirroring()
+        // Dock 还原是异步的，等它落地再让进程走，否则 Dock 会永远停在左边
+        screenCtl.waitForPendingDockWork()
     }
 
     // MARK: - Status Bar
@@ -155,7 +175,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusMenu.addItem(.separator())
 
         autoLaunchItem = makeItem("开机自启", symbol: "power", action: #selector(toggleAutoLaunch))
-        autoLaunchItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        refreshAutoLaunchItem()
         statusMenu.addItem(autoLaunchItem)
 
         statusMenu.addItem(makeItem("退出 Bento", symbol: nil, action: #selector(quitApp), key: "q"))
@@ -244,91 +264,203 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         pollTimer = nil
     }
 
-    private func isRustDeskConnected() -> Bool {
-        runProcess("/usr/bin/pgrep", ["-fi", "rustdesk.*--cm"]).status == 0
+    /// 探测三态：进程 spawn 失败 / 看门狗超时杀 / netstat 输出异常都不是「没有连接」。
+    /// 原实现把一切失败折叠成 false——远程会话中一次瞬时故障就恢复亮屏 + 锁定，
+    /// 本地桌面直接暴露一个轮询周期，还把对面正在操作的会话打断
+    private enum ConnectionProbe {
+        case connected(String)
+        case disconnected
+        case unknown
     }
 
-    private func isScreenSharingConnected() -> Bool {
+    private func probeRustDesk() -> ConnectionProbe {
+        switch runProcess("/usr/bin/pgrep", ["-fi", "rustdesk.*--cm"]).status {
+        case 0: return .connected("RustDesk")
+        case 1: return .disconnected // pgrep 语义：1 = 确定无匹配进程
+        default: return .unknown     // -1 spawn 失败 / 15 看门狗超时杀 / 其他
+        }
+    }
+
+    private func probeScreenSharing() -> ConnectionProbe {
         // 只匹配本地地址列（第 4 列）：本机主动连别人 5900 不算。
         // 直接跑 netstat 在 Swift 里解析，省掉 sh+awk 两个进程
-        let out = runProcess("/usr/sbin/netstat", ["-an", "-p", "tcp"], captureOutput: true).output
-        for line in out.split(separator: "\n") {
+        let r = runProcess("/usr/sbin/netstat", ["-an", "-p", "tcp"], captureOutput: true)
+        // netstat 正常运行绝不会输出空——空输出/非零退出都是探测手段故障
+        guard r.status == 0, !r.output.isEmpty else { return .unknown }
+        for line in r.output.split(separator: "\n") {
             let cols = line.split(separator: " ", omittingEmptySubsequences: true)
             if cols.count >= 6, cols[3].hasSuffix(".5900"), cols[5] == "ESTABLISHED" {
-                return true
+                return .connected("Screen Sharing")
             }
         }
-        return false
+        return .disconnected
     }
 
     /// Runs on pollQueue: process/netstat checks block, so they stay off the
     /// main thread; state changes are applied back on main.
     private func pollConnectionState() {
-        let rustdesk = isRustDeskConnected()
-        let screenSharing = isScreenSharingConnected()
+        let rustdesk = probeRustDesk()
+        if case .connected(let source) = rustdesk {
+            DispatchQueue.main.async { [weak self] in self?.applyConnected(source) }
+            return // 已确定连接就不用再跑 netstat
+        }
+        let screenSharing = probeScreenSharing()
+        if case .connected(let source) = screenSharing {
+            DispatchQueue.main.async { [weak self] in self?.applyConnected(source) }
+            return
+        }
         DispatchQueue.main.async { [weak self] in
-            self?.applyConnectionState(rustdesk: rustdesk, screenSharing: screenSharing)
+            self?.applyNotConnected(rustdesk: rustdesk, screenSharing: screenSharing)
         }
     }
 
-    private func applyConnectionState(rustdesk: Bool, screenSharing: Bool) {
-        let connected = rustdesk || screenSharing
+    /// 远程会话中热插显示器 / 睡眠唤醒：重新镜像 + 重压 gamma（都幂等）
+    private func reassertScreenOffState() {
+        guard screenCtl.isScreenBlack else { return }
+        screenCtl.enableMirroring()
+        screenCtl.reassertBlackIfNeeded()
+    }
 
-        if connected && !screenCtl.isScreenBlack {
-            let source = rustdesk ? "RustDesk" : "Screen Sharing"
+    /// 连续确定断开的轮数；恢复亮屏要求 ≥2（单次假阴性不暴露桌面）
+    private var disconnectStreak = 0
+    /// 断开后延迟撤黑屏的任务（等锁屏接管）；重新连上要取消
+    private var pendingRestore: DispatchWorkItem?
+    /// 延迟撤黑的代际令牌。cancel 只能拦「还没开跑」的任务，且极端主线程阻塞下
+    /// 可能积压多个任务而 cancel 只够得着最后一个——过期代际的任务自己作废
+    private var restoreGeneration = 0
+    /// 镜像/分辨率/Dock 已为本次会话配置过。和 isScreenBlack 分开记：
+    /// setBlack 部分失败时轮询要重试 gamma，但重活（尤其 killall Dock）绝不能每 3s 来一遍
+    private var sessionPrepared = false
+    /// 激活当前会话的来源（"RustDesk" / "Screen Sharing"）；断开确认只看这一路的探测
+    private var activeSource: String?
+    private var loggedUnknownProbe = false
+
+    // 两个 apply 共用的闸门语义：pollConnectionState 是异步交回主线程的，用户在
+    // 这中间关掉远程熄屏时 stopPollTimer 只停了后续轮次，拦不住已经算完的这一份。
+    // 放行的话它会重新镜像 + 改 Dock + 黑屏，而定时器已停——没有路径再恢复回来
+
+    private func applyConnected(_ source: String) {
+        guard remoteMonitorEnabled else { return }
+        disconnectStreak = 0
+        loggedUnknownProbe = false
+        activeSource = source
+        restoreGeneration += 1 // 作废一切在途的延迟撤黑任务
+        pendingRestore?.cancel()
+        pendingRestore = nil
+        if !screenCtl.isScreenBlack {
             NSLog("[POLL] \(source) connection active — activating screen off")
-            screenCtl.enableMirroring()
-            screenCtl.switchResolution()
-            screenCtl.saveDockAndSetLeft()
+            if !sessionPrepared {
+                sessionPrepared = true
+                screenCtl.enableMirroring()
+                screenCtl.switchResolution()
+                screenCtl.saveDockAndSetLeft()
+            }
             screenCtl.setBlack()
             updateStatus()
-        } else if !connected && screenCtl.isScreenBlack {
-            NSLog("[POLL] No active connection — restoring screen")
-            screenCtl.restore()
-            screenCtl.restoreResolution()
-            screenCtl.restoreDock()
-            screenCtl.disableMirroring(forceFallback: true)
-            screenCtl.lockScreen()
-            updateStatus()
-        } else if !connected, lastPolledConnected != false {
-            // 只在启动首轮和连接边沿做一次镜像清理，空闲时不再每跳空转
-            screenCtl.disableMirroring()
         }
-        lastPolledConnected = connected
+        lastPolledConnected = true
+    }
+
+    /// 两路探测都不是「确定连接」时的处理。关键规则：黑屏会话的断开确认
+    /// **只看激活这次会话的那一路探测**——另一路可能在本机永远不可用
+    /// （实测 netstat 在子进程里可能整张 TCP 表不可见，永远 unknown），
+    /// 要求它也「确定断开」等于 RustDesk 会话结束后黑屏永不恢复。
+    /// 它既然从来探不到连接，也不可能是这次会话的激活来源
+    private func applyNotConnected(rustdesk: ConnectionProbe, screenSharing: ConnectionProbe) {
+        guard remoteMonitorEnabled else { return }
+        if screenCtl.isScreenBlack || sessionPrepared {
+            let sourceProbe = activeSource == "Screen Sharing" ? screenSharing : rustdesk
+            if case .disconnected = sourceProbe {
+                loggedUnknownProbe = false
+                disconnectStreak += 1
+                if disconnectStreak >= 2 { confirmedDisconnect() }
+            } else {
+                // 激活来源的探测手段故障：维持黑屏，绝不据此恢复亮屏
+                disconnectStreak = 0
+                if !loggedUnknownProbe {
+                    loggedUnknownProbe = true
+                    ErrorLog.log("远程检测: 激活来源探测异常（进程失败/超时），维持熄屏状态")
+                }
+            }
+        } else {
+            // 空闲态：镜像清理是幂等兜底（只在有残留快照时动手），unknown 也照走
+            // ——netstat 永久 unknown 的机器上，启动首轮的镜像恢复不能被卡住
+            if lastPolledConnected != false { screenCtl.disableMirroring() }
+            lastPolledConnected = false
+            if case .unknown = screenSharing, !loggedUnknownProbe {
+                loggedUnknownProbe = true
+                ErrorLog.log("远程检测: netstat 探测不可用（输出为空/失败），屏幕共享检测失效；RustDesk 检测不受影响")
+            }
+        }
+    }
+
+    /// 确认断开：先锁再撤黑。原顺序（恢复 → 锁）在屏保接管前有一段真实桌面
+    /// 直接可见；现在 gamma 黑幕多留 1.2s 垫底，锁屏就位后才撤，全程无裸露窗口。
+    /// 期间若重新连上，pendingRestore 会被取消，黑幕原样保留
+    private func confirmedDisconnect() {
+        disconnectStreak = 0
+        sessionPrepared = false
+        activeSource = nil
+        NSLog("[POLL] No active connection — locking, then restoring screen")
+        screenCtl.lockScreen()
+        restoreGeneration += 1
+        let gen = restoreGeneration
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, gen == self.restoreGeneration else { return }
+            self.pendingRestore = nil
+            self.screenCtl.restore()
+            self.screenCtl.restoreResolution()
+            self.screenCtl.restoreDock()
+            self.screenCtl.disableMirroring(forceFallback: true)
+            self.updateStatus()
+        }
+        pendingRestore = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
     }
 
     // MARK: - UI Updates
+
+    /// 状态栏按钮当前显示的 symbol 名。
+    /// **重复赋同一个 image 也会让 NSStatusItem 重算按钮几何** —— 而防睡的 60s
+    /// 心跳经 refreshSleepGuardState 会走到 updateStatus，万一撞上菜单正在定位的
+    /// 瞬间，菜单就会按错位的锚点弹出（跑到屏幕右边）。这正是 updateSleepGuardMenu
+    /// 注释里记过的那个坑，只是触发源更冷门。symbol 没变就不碰 image；
+    /// title/toolTip 不参与几何，照常刷新
+    private var currentStatusSymbol: String?
+
+    private func setStatusSymbol(_ name: String, description: String? = nil) {
+        guard currentStatusSymbol != name else { return }
+        currentStatusSymbol = name
+        statusItem.button?.image = NSImage(systemSymbolName: name, accessibilityDescription: description)
+        statusItem.button?.title = ""
+    }
 
     private func updateStatus() {
         if tilingPermissionMissing {
             // 未授予辅助功能权限时，菜单栏图标给出明确状态
             statusMenuItem.title = "需要辅助功能权限"
             statusMenuItem.image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: nil)
-            statusItem.button?.image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: "Bento 需要辅助功能权限")
-            statusItem.button?.title = ""
+            setStatusSymbol("exclamationmark.triangle", description: "Bento 需要辅助功能权限")
             statusItem.button?.toolTip = "Bento 需要辅助功能权限"
             return
         }
         if !remoteMonitorEnabled {
             statusMenuItem.title = "远程熄屏监控已停用"
             statusMenuItem.image = NSImage(systemSymbolName: "pause.circle", accessibilityDescription: nil)
-            statusItem.button?.image = NSImage(systemSymbolName: "eye", accessibilityDescription: nil)
-            statusItem.button?.title = ""
+            setStatusSymbol("eye", description: "Bento")
             statusItem.button?.toolTip = tooltip("远程熄屏监控已停用")
             return
         }
         if screenCtl.isScreenBlack {
             statusMenuItem.title = "远程已连接 · 已熄屏"
             statusMenuItem.image = NSImage(systemSymbolName: "eye.slash.fill", accessibilityDescription: nil)
-            statusItem.button?.image = NSImage(systemSymbolName: "eye.slash.fill", accessibilityDescription: nil)
             // 熄屏态只换图标不加文字：菜单栏空间是稀缺资源（尤其拥挤栏），语义放 tooltip
-            statusItem.button?.title = ""
+            setStatusSymbol("eye.slash.fill", description: "Bento 已熄屏")
             statusItem.button?.toolTip = "远程已连接 · 已熄屏"
         } else {
             statusMenuItem.title = "监控中"
             statusMenuItem.image = NSImage(systemSymbolName: "checkmark.circle", accessibilityDescription: nil)
-            statusItem.button?.image = NSImage(systemSymbolName: "eye", accessibilityDescription: nil)
-            statusItem.button?.title = ""
+            setStatusSymbol("eye", description: "Bento")
             statusItem.button?.toolTip = tooltip("Bento")
         }
     }
@@ -361,6 +493,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startScrollReverser(showAlert: Bool) {
+        // 自愈重建失败 = 功能已停摆，菜单得跟着变成"需授权 / 可重试"的样子
+        scrollReverser.onTapRebuildFailed = { [weak self] in
+            self?.setScrollPermissionMissing(true)
+        }
         if scrollReverser.start() {
             setScrollPermissionMissing(false)
             return
@@ -419,11 +555,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Actions
 
+    private var authRestartInFlight = false
+
     @objc private func authRestart() {
-        runProcess("/usr/bin/osascript", [
-            "-e", "tell application \"Terminal\" to do script \"sudo fdesetup authrestart\"",
-            "-e", "tell application \"Terminal\" to activate",
-        ])
+        // 重入保护：osascript 等自动化授权对话框期间（最长 300s），重复点菜单
+        // 会叠加 spawn 出多个 osascript / 多个 Terminal 标签
+        guard !authRestartInFlight else { return }
+        authRestartInFlight = true
+        // 两点都和 osascript 会阻塞有关：首次控制 Terminal 时系统弹「自动化」授权
+        // 对话框，osascript 一直等到用户回答为止。
+        // 1) 不能占着主线程——那段时间整个 App 转菊花
+        // 2) 不能用 runProcess 默认的 10s 看门狗——会在用户读对话框时把它杀掉，
+        //    表现成"点了菜单毫无反应"
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            runProcess("/usr/bin/osascript", [
+                "-e", "tell application \"Terminal\" to do script \"sudo fdesetup authrestart\"",
+                "-e", "tell application \"Terminal\" to activate",
+            ], timeout: 300)
+            DispatchQueue.main.async { self?.authRestartInFlight = false }
+        }
     }
 
     @objc private func quitApp() {
@@ -445,7 +595,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             startPollTimer()
         } else {
             stopPollTimer()
-            if screenCtl.isScreenBlack {
+            restoreGeneration += 1
+            pendingRestore?.cancel()
+            pendingRestore = nil
+            disconnectStreak = 0
+            let hadSession = screenCtl.isScreenBlack || sessionPrepared
+            sessionPrepared = false
+            activeSource = nil
+            if hadSession {
                 screenCtl.restore()
                 screenCtl.restoreResolution()
                 screenCtl.restoreDock()
@@ -491,17 +648,38 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         iconMgr.openManagerWindow()
     }
 
+    /// 菜单里的开机自启行随 SMAppService 实际状态走。requiresApproval 单独呈现：
+    /// 系统把注册挂起等用户批准时，开关自己 register/unregister 都动不了，
+    /// 不提示的话这一行表现为"点了没反应"的死开关
+    private func refreshAutoLaunchItem() {
+        switch SMAppService.mainApp.status {
+        case .enabled:
+            autoLaunchItem.title = "开机自启"
+            autoLaunchItem.state = .on
+        case .requiresApproval:
+            autoLaunchItem.title = "开机自启（待系统设置批准）"
+            autoLaunchItem.state = .mixed
+        default:
+            autoLaunchItem.title = "开机自启"
+            autoLaunchItem.state = .off
+        }
+    }
+
     @objc private func toggleAutoLaunch() {
         do {
-            if SMAppService.mainApp.status == .enabled {
+            switch SMAppService.mainApp.status {
+            case .enabled:
                 try SMAppService.mainApp.unregister()
-            } else {
+            case .requiresApproval:
+                // 卡在待批准：这里能做的只有把用户带到批准入口
+                SMAppService.openSystemSettingsLoginItems()
+            default:
                 try SMAppService.mainApp.register()
             }
         } catch {
             ErrorLog.log("开机自启切换失败: \(error.localizedDescription)")
         }
-        autoLaunchItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        refreshAutoLaunchItem()
     }
 
     // MARK: - Auto Launch (SMAppService)
@@ -517,10 +695,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let key = "LaunchAtLoginConfigured"
         if !UserDefaults.standard.bool(forKey: key) {
-            UserDefaults.standard.set(true, forKey: key)
             register(reason: "首次启动")
+            // 注册真的生效（或进入待批准）才记「已配置」：先置位的话，
+            // 首次注册失败就永远不会再试，开机自启静默失效
+            let status = SMAppService.mainApp.status
+            if status == .enabled || status == .requiresApproval {
+                UserDefaults.standard.set(true, forKey: key)
+            }
         }
-        autoLaunchItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        refreshAutoLaunchItem()
     }
 
     private func register(reason: String) {
@@ -536,11 +719,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 extension AppDelegate: NSMenuDelegate {
-    func menuWillOpen(_ menu: NSMenu) {
-        // 子菜单也会走 delegate 转发链，只认主菜单
+    /// 文案/勾选态的刷新点。**不放在 menuWillOpen 里**：NSMenu.h 明写
+    /// "Do not modify the structure of the menu or the menu items from within
+    /// these callbacks"，而这里要改标题（定时防睡的剩余时间）。menuNeedsUpdate
+    /// 就是为此设计的，且在 menuWillOpen 之前调用，菜单几何按新文案算
+    func menuNeedsUpdate(_ menu: NSMenu) {
         guard menu === statusMenu else { return }
         // 每次打开都刷一次剩余时间，省得只靠 60s 心跳
         updateSleepGuardMenu()
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        // 子菜单也会走 delegate 转发链，只认主菜单
+        guard menu === statusMenu else { return }
         // 分屏 tap 让路：它的窗口枚举按 pid 过滤掉了 Bento 自己的菜单窗口，
         // 只看得见菜单「底下」那个别家窗口的标题栏带，会把落在菜单上的点击
         // 当成标题栏操作吞掉并吸附无关窗口

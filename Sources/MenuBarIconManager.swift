@@ -43,7 +43,19 @@ class MenuBarIconManager: NSObject {
     private var managerWindow: NSWindow?
     private var tableView: NSTableView?
     private var emptyView: NSView?
+    private var emptyIconView: NSImageView?
+    private var emptyTitleLabel: NSTextField?
+    private var emptySubLabel: NSTextField?
+    private var emptyActionButton: NSButton?
     private var footnoteLabel: NSTextField?
+
+    // —— 线程约定 ——
+    // 下面这组模型状态（hiddenKeys / iconOrder / iconNames / lastEntryKeys 及各类缓存）
+    // 一律**只在 queue 上读写**。enforce 每 3s 在 queue 上整体遍历它们，Swift 的
+    // Set/Array/Dictionary 不支持并发读写——UI 侧（开关、拖拽排序、全部恢复）曾经直接
+    // 在主线程改这些集合，和轮询撞上就是撕裂/崩溃。UI 现在只发 queue.async 表达意图，
+    // 反向只通过 publishRows 往主线程投递不可变快照（rows）。
+    // 主线程独占的是另一组：rows / rowIconCache / 各 UI 出口。
 
     /// 持久化的隐藏键集合
     private var hiddenKeys: Set<String> = {
@@ -52,8 +64,12 @@ class MenuBarIconManager: NSObject {
         didSet { UserDefaults.standard.set(Array(hiddenKeys), forKey: "HiddenMenuBarItemKeys") }
     }
 
-    /// 图标顺序（左→右，与菜单栏一致），持久化
-    private var iconOrder: [String] = UserDefaults.standard.stringArray(forKey: "MenuBarIconOrder") ?? [] {
+    /// 图标顺序（左→右，与菜单栏一致），持久化。
+    /// 读盘即去重：重复键会让下面的顺序采纳多消费一次 pending 而越界
+    private var iconOrder: [String] = {
+        var seen = Set<String>()
+        return (UserDefaults.standard.stringArray(forKey: "MenuBarIconOrder") ?? []).filter { seen.insert($0).inserted }
+    }() {
         didSet { UserDefaults.standard.set(iconOrder, forKey: "MenuBarIconOrder") }
     }
     /// 键 → 显示名缓存（App 退出后其隐藏行仍能显示名字），持久化
@@ -73,8 +89,12 @@ class MenuBarIconManager: NSObject {
     /// 键 → 最近一次解析出的条目键（退出恢复用）；配对失败只记一次日志
     private var lastEntryKeys: [String: [String]] = [:]
     private var loggedPairingIssues = Set<String>()
-    /// 管理界面数据（主线程发布）
+    /// 管理界面数据（主线程独占：publishRows 投递，表格与脚注读取）
     fileprivate(set) var rows: [Row] = []
+    /// 缺辅助功能权限（主线程独占）。enforce 无权限时是完全静默 return 的，
+    /// 管理窗口只显示「未识别到菜单栏图标」——和滚动/分屏的显式权限引导不一致，
+    /// 用户会当成 bug。空态据此换文案并给出去系统设置的入口
+    fileprivate(set) var needsAccessibility = false
     /// 列表更新回调（在主线程调用）
     var onRowsChanged: (() -> Void)?
 
@@ -102,9 +122,16 @@ class MenuBarIconManager: NSObject {
         return (CFPreferencesCopyAppValue(mbaPositionsKey, mbaPrefDomain) as? [String: Any]) ?? [:]
     }
 
+    /// 字典写入失败已记过日志（恢复时记恢复）——失败会让每 3s 的语义校验反复回写，逐轮记会刷屏
+    private var loggedWriteFailure = false
+
     private func writeRawPositions(_ dict: [String: Any]) {
         CFPreferencesSetAppValue(mbaPositionsKey, dict as CFDictionary, mbaPrefDomain)
-        CFPreferencesAppSynchronize(mbaPrefDomain)
+        let ok = CFPreferencesAppSynchronize(mbaPrefDomain)
+        if ok == loggedWriteFailure { // 状态翻转才记
+            loggedWriteFailure = !ok
+            ErrorLog.log(ok ? "图标管理: 字典写入已恢复" : "图标管理: 字典写入失败（cfprefsd 拒绝），语义校验将反复重试")
+        }
     }
 
     /// 自家状态栏项在 agent 字典里的条目键：先认字典里现存的候选；都不存在时只写
@@ -129,7 +156,10 @@ class MenuBarIconManager: NSObject {
         let app = AXUIElementCreateApplication(pid)
         var extrasValue: AnyObject?
         guard AXUIElementCopyAttributeValue(app, "AXExtrasMenuBar" as CFString, &extrasValue) == .success,
-              let bar = extrasValue
+              let bar = extrasValue,
+              // 外部 App 的 AX 返回值不可信，且这里跑在 3s 轮询里——类型不对
+              // 直接强转等于反复崩溃
+              CFGetTypeID(bar) == AXUIElementGetTypeID()
         else { return [] }
         var children: AnyObject?
         AXUIElementCopyAttributeValue(bar as! AXUIElement, kAXChildrenAttribute as CFString, &children)
@@ -140,7 +170,9 @@ class MenuBarIconManager: NSObject {
             AXUIElementCopyAttributeValue(el, kAXDescriptionAttribute as CFString, &desc)
             AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &size)
             var s = CGSize.zero
-            if let size { AXValueGetValue(size as! AXValue, .cgSize, &s) }
+            if let size, CFGetTypeID(size) == AXValueGetTypeID() {
+                AXValueGetValue(size as! AXValue, .cgSize, &s)
+            }
             guard s.width > 0 else { continue } // 无尺寸的是占位/系统隐藏项
             out.append(ExtraItem(title: (title as? String) ?? "",
                                  desc: (desc as? String) ?? ""))
@@ -308,7 +340,11 @@ class MenuBarIconManager: NSObject {
     // MARK: 状态纠正（每 3s，后台线程）
 
     private func enforce(force: Bool = false) {
-        guard AXIsProcessTrustedWithOptions(nil) else { return }
+        guard AXIsProcessTrustedWithOptions(nil) else {
+            publishPermissionState(missing: true)
+            return
+        }
+        publishPermissionState(missing: false)
         let runningApps = NSWorkspace.shared.runningApplications
         // MenuBarAgent 不在 = 不是 macOS 27 的菜单栏机制，本模块不适用
         guard let mbaApp = runningApps.first(where: { $0.bundleIdentifier == "com.apple.MenuBarAgent" })
@@ -316,8 +352,7 @@ class MenuBarIconManager: NSObject {
         let skipAdoption = suppressAdoptionOnce
         suppressAdoptionOnce = false
 
-        var raw = readRawPositions()
-        let positions = raw.compactMapValues { ($0 as? NSNumber)?.doubleValue }
+        let positions = readRawPositions().compactMapValues { ($0 as? NSNumber)?.doubleValue }
         let runningIDs = runningApps.compactMap(\.bundleIdentifier).sorted()
 
         // —— 门控：agent 字典和运行 App 集都没变且未超兜底间隔，就不跑 AX 枚举（重活）——
@@ -327,7 +362,10 @@ class MenuBarIconManager: NSObject {
         let signature = hasher.finalize()
         let stale = Date().timeIntervalSince(lastFullPass) > 60
         guard force || stale || signature != lastSignature else { return }
-        lastFullPass = Date()
+        // 只在真的跑了全量探测（fullProbe = stale）时才记时间戳。原先每个通过
+        // 门控的轮次都重置它——菜单栏频繁扰动（行情图标每轮改位置）时 stale
+        // 永不为真，「60s 兜底全量探测」被无限推迟，晚建图标的 App 永远发现不了
+        if stale { lastFullPass = Date() }
 
         let (thirdParty, junkKeys) = enumerateItems(positions: positions, runningApps: runningApps, fullProbe: stale)
         var items = thirdParty
@@ -335,7 +373,10 @@ class MenuBarIconManager: NSObject {
         // Bento 本尊也作为一行参与排序（不可隐藏，setRowHidden 与采纳都有防御）
         items.append(LiveItem(key: "bento:main", displayName: "Bento", stableName: "Bento",
                               entryKeys: ownEntryKeys("BentoMain", positions: positions)))
-        let byKey = Dictionary(uniqueKeysWithValues: items.map { ($0.key, $0) })
+        // uniquingKeysWith 而非 uniqueKeysWithValues：后者遇重复键直接 trap，而
+        // 同一 bundleID 跑多份实例（open -n / 两份拷贝）时第三方键 "bundleID|序号"
+        // 真的会重复。取先出现的那个（runningApplications 的顺序），别崩
+        let byKey = Dictionary(items.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
         for item in items where !item.entryKeys.isEmpty { lastEntryKeys[item.key] = item.entryKeys }
         if hiddenKeys.contains("bento:main") { hiddenKeys.remove("bento:main") }
 
@@ -360,7 +401,10 @@ class MenuBarIconManager: NSObject {
             let visibleSet = Set(newVisibleOrder).intersection(iconOrder)
             var pending = newVisibleOrder.filter { visibleSet.contains($0) }
             var reordered = iconOrder
+            // pending 用尽即停：iconOrder 理论上无重复（读盘去重 + 各处 contains 守卫），
+            // 但它来自 UserDefaults，外部写入不该换来一次 removeFirst 越界
             for (i, k) in reordered.enumerated() where visibleSet.contains(k) {
+                guard !pending.isEmpty else { break }
                 reordered[i] = pending.removeFirst()
             }
             if reordered != iconOrder { iconOrder = reordered }
@@ -426,20 +470,21 @@ class MenuBarIconManager: NSObject {
 
         var finalPositions = positions
         if !writeReasons.isEmpty {
+            // 写前重读最新字典：从开头那次读取到这里隔着整段慢速 AX 枚举（可达数百 ms），
+            // 期间 agent 重写 / 新 App 注册 / 用户拖动产生的条目若被旧副本整体盖掉，
+            // 就是真丢数据。只把本轮管理的键合并到最新副本上，别的键保持人家的现值
+            var freshRaw = readRawPositions()
             for entry in desired {
-                for k in entry.keys {
-                    raw[k] = entry.pos
-                    finalPositions[k] = entry.pos
-                }
+                for k in entry.keys { freshRaw[k] = entry.pos }
             }
             // 清掉历史方案的旧条目 + 本轮识别出的幻影键（agent 永不消费的前缀变体）
             for legacy in ["status:Bento::Item-0", "status:Bento::Item-1",
                            "status:Bento::BentoHider", "status:com.sz.bento::BentoHider",
                            "status:com.sz.bento::BentoMain"] + junkKeys {
-                raw.removeValue(forKey: legacy)
-                finalPositions.removeValue(forKey: legacy)
+                freshRaw.removeValue(forKey: legacy)
             }
-            writeRawPositions(raw)
+            writeRawPositions(freshRaw)
+            finalPositions = freshRaw.compactMapValues { ($0 as? NSNumber)?.doubleValue }
             ErrorLog.log("图标管理: 回写字典（\(writeReasons.joined(separator: "、"))）")
         }
         // 签名以回写后的字典为准，别把自己的写入当成下一轮的外部变化
@@ -477,8 +522,12 @@ class MenuBarIconManager: NSObject {
                 AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &size)
                 var p = CGPoint.zero
                 var s = CGSize.zero
-                if let pos { AXValueGetValue(pos as! AXValue, .cgPoint, &p) }
-                if let size { AXValueGetValue(size as! AXValue, .cgSize, &s) }
+                if let pos, CFGetTypeID(pos) == AXValueGetTypeID() {
+                    AXValueGetValue(pos as! AXValue, .cgPoint, &p)
+                }
+                if let size, CFGetTypeID(size) == AXValueGetTypeID() {
+                    AXValueGetValue(size as! AXValue, .cgSize, &s)
+                }
                 if s.width > 0 { chevron = CGRect(origin: p, size: s) }
                 return
             }
@@ -491,9 +540,12 @@ class MenuBarIconManager: NSObject {
                                       kAXWindowsAttribute as CFString, &windows)
         for w in windows as? [AXUIElement] ?? [] { walk(w, 0) }
         guard let chevron else { return } // 没展开，无事可做
-        // frame 合法性：chevron 是菜单栏里 ~18x30 的小图形，越界/离谱的都是鬼影，不点
+        // frame 合法性：chevron 是菜单栏里 ~18x30 的小图形，越界/离谱的都是鬼影，不点。
+        // X 轴也要卡在主屏范围内——这是合成点击，点错位置就是替用户误操作
+        let screenWidth = CGDisplayBounds(CGMainDisplayID()).width
         guard chevron.width > 8, chevron.width < 48, chevron.height < 48,
-              chevron.minY >= 0, chevron.maxY <= 44 else {
+              chevron.minY >= 0, chevron.maxY <= 44,
+              chevron.minX >= 0, chevron.maxX <= screenWidth else {
             ErrorLog.log("图标管理: chevron frame 异常 \(chevron)，放弃收起点击")
             return
         }
@@ -505,6 +557,22 @@ class MenuBarIconManager: NSObject {
         CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: p, mouseButton: .left)?.post(tap: .cghidEventTap)
         if let saved { CGWarpMouseCursorPosition(saved) }
         ErrorLog.log("图标管理: 已点击收起展开的溢出区")
+    }
+
+    /// 队列侧记住上次发布过的值：这个调用点在签名门之前（无权限时根本走不到门），
+    /// 若无脑每轮 main.async 一次，稳态下就是每 3s 白白唤醒一次主线程 —— 而签名门
+    /// 存在的意义正是让稳态的 enforce 什么都不做
+    private var lastPublishedPermissionMissing: Bool?
+
+    private func publishPermissionState(missing: Bool) {
+        guard lastPublishedPermissionMissing != missing else { return }
+        lastPublishedPermissionMissing = missing
+        DispatchQueue.main.async {
+            self.needsAccessibility = missing
+            // 权限没了还挂着旧列表的话，开关/拖拽全是无效操作；清掉让权限空态顶上
+            if missing { self.rows = [] }
+            self.onRowsChanged?()
+        }
     }
 
     private func publishRows(byKey: [String: LiveItem]) {
@@ -532,32 +600,44 @@ class MenuBarIconManager: NSObject {
     /// hiddenKeys 保留——下次启动会重新隐藏，语义不变。
     /// 不放 applicationWillTerminate：重启/关机也会走那里，每次都制造 agent 重写扰动。
     func prepareForQuit() {
-        queue.sync {
-            guard !hiddenKeys.isEmpty else { return }
-            var raw = readRawPositions()
-            var moved = 0
-            for (i, key) in hiddenKeys.enumerated() {
-                for entryKey in lastEntryKeys[key] ?? [] where raw[entryKey] != nil {
-                    raw[entryKey] = 500.0 + Double(i) * 8 // 可见区左端，一次性值，重启会重排
-                    moved += 1
-                }
-            }
-            guard moved > 0 else { return }
-            writeRawPositions(raw)
-            ErrorLog.log("图标管理: 退出前已把 \(moved) 个隐藏条目写回可见区")
+        // 有界等待而非 queue.sync：queue 可能正卡在对无响应 App 的 AX 往返上，
+        // 退出不该无限转菊花。超时就放弃写回（图标留在溢出区，代价可接受）
+        let done = DispatchSemaphore(value: 0)
+        queue.async { [self] in
+            writeBackHiddenEntries()
+            done.signal()
         }
+        if done.wait(timeout: .now() + 3) == .timedOut {
+            ErrorLog.log("图标管理: 退出写回等待超时，放弃")
+        }
+    }
+
+    private func writeBackHiddenEntries() {
+        guard !hiddenKeys.isEmpty else { return }
+        var raw = readRawPositions()
+        var moved = 0
+        for (i, key) in hiddenKeys.enumerated() {
+            for entryKey in lastEntryKeys[key] ?? [] where raw[entryKey] != nil {
+                raw[entryKey] = 500.0 + Double(i) * 8 // 可见区左端，一次性值，重启会重排
+                moved += 1
+            }
+        }
+        guard moved > 0 else { return }
+        writeRawPositions(raw)
+        ErrorLog.log("图标管理: 退出前已把 \(moved) 个隐藏条目写回可见区")
     }
 
     // MARK: 对外操作（主线程）
 
+    /// 主线程只表达意图，集合本身在 queue 上改（见类顶部的线程约定）
     func setRowHidden(_ key: String, _ hidden: Bool) {
         guard key != "bento:main" else { return } // 本尊不可隐藏
-        if hidden {
-            hiddenKeys.insert(key)
-        } else {
-            hiddenKeys.remove(key)
-        }
         queue.async {
+            if hidden {
+                self.hiddenKeys.insert(key)
+            } else {
+                self.hiddenKeys.remove(key)
+            }
             self.suppressAdoptionOnce = true
             self.enforce(force: true)
         }
@@ -628,23 +708,37 @@ class MenuBarIconManager: NSObject {
         content.addSubview(footnote)
         content.addSubview(showAll)
 
-        // 空态：图标 + 两行说明，一个图标都没识别到时不至于一片空白
+        // 空态：图标 + 两行说明，一个图标都没识别到时不至于一片空白。
+        // 缺辅助功能权限是其中一种空态，文案和图标换掉并补一个去系统设置的按钮
         let emptyIcon = NSImageView(image: NSImage(systemSymbolName: "app.dashed", accessibilityDescription: nil)!)
         emptyIcon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 30, weight: .light)
         emptyIcon.contentTintColor = .tertiaryLabelColor
-        let emptyTitle = NSTextField(labelWithString: "未识别到菜单栏图标")
+        let emptyTitle = NSTextField(labelWithString: "")
         emptyTitle.font = NSFont.systemFont(ofSize: 13, weight: .medium)
         emptyTitle.textColor = .secondaryLabelColor
-        let emptySub = NSTextField(labelWithString: "第三方 App 的菜单栏图标会出现在这里")
+        emptyTitle.alignment = .center
+        let emptySub = NSTextField(labelWithString: "")
         emptySub.font = NSFont.systemFont(ofSize: 11)
         emptySub.textColor = .tertiaryLabelColor
-        let emptyStack = NSStackView(views: [emptyIcon, emptyTitle, emptySub])
+        emptySub.alignment = .center
+        emptySub.maximumNumberOfLines = 2
+        let emptyAction = NSButton(title: "打开「辅助功能」设置", target: self,
+                                   action: #selector(openAccessibilitySettings))
+        emptyAction.bezelStyle = .rounded
+        emptyAction.controlSize = .small
+        emptyAction.font = NSFont.systemFont(ofSize: 11)
+        let emptyStack = NSStackView(views: [emptyIcon, emptyTitle, emptySub, emptyAction])
         emptyStack.orientation = .vertical
         emptyStack.alignment = .centerX
         emptyStack.spacing = 6
+        emptyStack.setCustomSpacing(12, after: emptySub)
         emptyStack.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(emptyStack)
         emptyView = emptyStack
+        emptyIconView = emptyIcon
+        emptyTitleLabel = emptyTitle
+        emptySubLabel = emptySub
+        emptyActionButton = emptyAction
 
         NSLayoutConstraint.activate([
             hint.topAnchor.constraint(equalTo: content.topAnchor, constant: 10),
@@ -666,19 +760,38 @@ class MenuBarIconManager: NSObject {
 
         onRowsChanged = { [weak self, weak window] in
             guard let self, let window, window.isVisible else { return }
-            self.emptyView?.isHidden = !self.rows.isEmpty
+            self.updateEmptyState()
             self.updateFootnote()
             self.tableView?.reloadData()
         }
         window.delegate = self
         managerWindow = window
-        emptyStack.isHidden = !rows.isEmpty
+        updateEmptyState()
         updateFootnote()
         table.reloadData()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         // 打开时立刻刷新一次列表
         queue.async { self.enforce(force: true) }
+    }
+
+    /// 空态（主线程）：区分「有权限但没识别到图标」和「压根没辅助功能权限」
+    private func updateEmptyState() {
+        emptyView?.isHidden = !rows.isEmpty
+        let missing = needsAccessibility
+        emptyIconView?.image = NSImage(
+            systemSymbolName: missing ? "lock.shield" : "app.dashed", accessibilityDescription: nil)
+        emptyTitleLabel?.stringValue = missing ? "需要辅助功能权限" : "未识别到菜单栏图标"
+        emptySubLabel?.stringValue = missing
+            ? "菜单栏图标的识别与排序依赖辅助功能权限。\n授权后列表会自动出现，无需重启 Bento"
+            : "第三方 App 的菜单栏图标会出现在这里"
+        emptyActionButton?.isHidden = !missing
+    }
+
+    @objc private func openAccessibilitySettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        else { return }
+        NSWorkspace.shared.open(url)
     }
 
     /// 底部脚注：动态统计 + 固定说明（主线程）
@@ -739,8 +852,8 @@ class MenuBarIconManager: NSObject {
     }
 
     @objc private func showAllRows() {
-        hiddenKeys.removeAll()
         queue.async {
+            self.hiddenKeys.removeAll()
             self.suppressAdoptionOnce = true
             self.enforce(force: true)
         }
@@ -836,12 +949,14 @@ extension MenuBarIconManager: NSTableViewDataSource, NSTableViewDelegate {
         guard to != from else { return false }
         let moved = rows.remove(at: from)
         rows.insert(moved, at: min(max(to, 0), rows.count))
-        // 行顺序写回 iconOrder（清单里没展示的键保持相对位置，追加在末尾）
-        var newOrder = rows.map(\.key)
-        for k in iconOrder where !newOrder.contains(k) { newOrder.append(k) }
-        iconOrder = newOrder
-        tableView.reloadData()
+        tableView.reloadData() // 拖拽的即时反馈由主线程独占的 rows 提供
+        // 行顺序写回 iconOrder 得在 queue 上做：清单里没展示的键（App 已退出等）
+        // 保持相对位置追加在末尾，那份合并要读 iconOrder，不能在主线程碰
+        let visibleOrder = rows.map(\.key)
         queue.async {
+            var newOrder = visibleOrder
+            for k in self.iconOrder where !newOrder.contains(k) { newOrder.append(k) }
+            self.iconOrder = newOrder
             self.suppressAdoptionOnce = true
             self.enforce(force: true)
         }
@@ -854,6 +969,10 @@ extension MenuBarIconManager: NSWindowDelegate {
         managerWindow = nil
         tableView = nil
         emptyView = nil
+        emptyIconView = nil
+        emptyTitleLabel = nil
+        emptySubLabel = nil
+        emptyActionButton = nil
         footnoteLabel = nil
         onRowsChanged = nil
     }

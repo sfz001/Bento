@@ -2,3 +2,8 @@
 *.app/
 .bento-codesign/
 .build/
+
+# 构建中间产物
+/Bento
+/Bento_arm64
+/Bento_x86_64

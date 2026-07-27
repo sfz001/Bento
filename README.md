@@ -2,9 +2,9 @@
 
 > 个人 macOS 菜单栏工具箱 / Personal macOS menu bar toolkit
 
-一个 app 装一堆个人需要的小功能。当前包含：远程连接自动熄屏、鼠标/触控板独立滚动方向控制、分屏（窗口吸附）、菜单栏图标管理。
+一个 app 装一堆个人需要的小功能。当前包含：远程连接自动熄屏、鼠标/触控板独立滚动方向控制、分屏（窗口吸附）、菜单栏图标管理、防止睡眠。
 
-A single app for a grab-bag of small personal utilities. Currently: remote-connection auto screen-off, Mos-style independent scroll-direction control, MaxTo-style window tiling, and a Bartender-style menu bar icon manager.
+A single app for a grab-bag of small personal utilities. Currently: remote-connection auto screen-off, Mos-style independent scroll-direction control, MaxTo-style window tiling, a Bartender-style menu bar icon manager, and a Caffeine-style sleep guard.
 
 ---
 
@@ -48,9 +48,19 @@ A single app for a grab-bag of small personal utilities. Currently: remote-conne
 - **拖动清单行**即可调整图标在菜单栏里的左右顺序（上 = 菜单栏左），顺序持久保存
 - 电池 / Wi-Fi / 用户切换等系统模块也在清单里，同样可隐藏、可排序；时钟与控制中心被系统固定，无法管理
 - Bento 自己的图标作为一行参与排序，但不可隐藏
-- 原理：直接改写 macOS 27 菜单栏（MenuBarAgent）的位置偏好字典，不用任何合成点击/拖拽；因此**需要 macOS 27+**
+- 原理：直接改写 macOS 27 菜单栏（MenuBarAgent）的位置偏好字典，不用合成拖拽（唯一的合成事件是收起「»」展开条的一次坐标点击）；因此**需要 macOS 27+**
 - 局限：macOS 27 没有强制隐藏的原语，菜单栏空间充裕时被隐藏的图标可能重新出现（拥挤时稳定）
 - 需要授予「辅助功能」权限
+
+#### 5. 防止睡眠（类似 Caffeine/Amphetamine）
+
+- **永久防睡**：勾选后一直保持唤醒，再点一次关闭
+- **定时防睡 ▸**：30 分钟 / 1 小时 / 2 小时 / 4 小时预设，点已勾选的那项即停止；菜单项会显示剩余时间
+- 「防睡设置…」可设自定义分钟数（1–1440）、选择是否允许屏幕自行熄灭（只防系统睡眠）、设置低电量自动停止阈值
+- 到期由系统 powerd 兜底释放，Bento 被强杀也不会把机器永久钉醒
+- 状态**不跨启动保存**：重启后不会自动恢复防睡，避免静默耗电
+- 无法阻止合盖睡眠（Apple Silicon 上没有不装内核扩展的做法），设置窗口里有说明
+- 不需要任何额外权限
 
 ### 使用方法
 
@@ -111,9 +121,19 @@ open Bento.app
 - **Drag rows** to reorder icons in the menu bar (top = leftmost); order persists
 - Movable system modules (Battery / Wi-Fi / User Switching) are listed and manageable too; Clock and Control Center are pinned by the system
 - Bento's own icon appears as a row for ordering but cannot be hidden
-- Works by rewriting the macOS 27 menu bar (MenuBarAgent) position-preference dict — no synthetic clicks or drags; therefore **requires macOS 27+**
+- Works by rewriting the macOS 27 menu bar (MenuBarAgent) position-preference dict — no synthetic drags (the only synthetic event is a single click to collapse the expanded « strip); therefore **requires macOS 27+**
 - Limitation: macOS 27 has no forced-hide primitive, so hidden icons can reappear when the bar has plenty of free space (stable on a crowded bar)
 - Requires Accessibility permission
+
+#### 5. Sleep guard (Caffeine/Amphetamine-style)
+
+- **永久防睡** (keep awake indefinitely): check to hold the Mac awake, click again to stop
+- **定时防睡 ▸** (timed): 30 min / 1 h / 2 h / 4 h presets; clicking the checked one stops it, and the menu row shows the time remaining
+- "防睡设置…" sets a custom duration (1–1440 min), whether the display may still sleep (system-sleep only), and a low-battery auto-stop threshold
+- The hard deadline is enforced by powerd, so even a killed Bento can't pin the machine awake forever
+- State is **not persisted across launches** — a relaunch never silently restores keep-awake and drains the battery
+- Cannot prevent clamshell sleep (no kext-free mechanism exists on Apple Silicon); the settings window says so
+- Requires no extra permissions
 
 ### Usage
 
