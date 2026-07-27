@@ -348,6 +348,44 @@ class WindowManager {
         return sizeSettable.boolValue
     }
 
+    // MARK: 诊断辅助（仅 TilingDebug 打开时调用）
+
+    /// 点附近的窗口候选（判断是否几何预过滤把目标漏掉了）
+    func debugWindowsNear(_ p: CGPoint) -> String {
+        let near = onScreenWindows().filter {
+            $0.bounds.insetBy(dx: -4, dy: -4).contains(p) || abs($0.bounds.minY - p.y) < 120
+        }
+        return near.prefix(4).map { "pid=\($0.pid) bounds=\($0.bounds)" }.joined(separator: " | ")
+    }
+
+    func debugAXWindows(pid: pid_t) -> String {
+        let app = AXUIElementCreateApplication(pid)
+        var value: AnyObject?
+        let err = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value)
+        guard err == .success, let windows = value as? [AXUIElement] else { return "AXWindows err=\(err.rawValue)" }
+        let parts = windows.prefix(6).map { w -> String in
+            var wid: CGWindowID = 0
+            let e = axGetCGWindowID(w, &wid)
+            return "wid=\(wid)/err\(e.rawValue) frame=\(frame(of: w).map { "\($0)" } ?? "nil")"
+        }
+        return "共 \(windows.count) 个窗口: " + parts.joined(separator: " | ")
+    }
+
+    func debugSnappable(_ window: AXUIElement) -> String {
+        var subrole: AnyObject?
+        AXUIElementCopyAttributeValue(window, kAXSubroleAttribute as CFString, &subrole)
+        var fullscreen: AnyObject?
+        AXUIElementCopyAttributeValue(window, "AXFullScreen" as CFString, &fullscreen)
+        var minimized: AnyObject?
+        AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minimized)
+        var sizeSettable = DarwinBoolean(false)
+        AXUIElementIsAttributeSettable(window, kAXSizeAttribute as CFString, &sizeSettable)
+        var posSettable = DarwinBoolean(false)
+        AXUIElementIsAttributeSettable(window, kAXPositionAttribute as CFString, &posSettable)
+        return "subrole=\(subrole as? String ?? "nil") fullscreen=\(String(describing: fullscreen as? Bool)) "
+            + "minimized=\(String(describing: minimized as? Bool)) sizeSettable=\(sizeSettable.boolValue) posSettable=\(posSettable.boolValue)"
+    }
+
     /// 读窗口 frame（CG 坐标）
     func frame(of window: AXUIElement) -> CGRect? {
         var posValue: AnyObject?
@@ -364,19 +402,24 @@ class WindowManager {
         return CGRect(origin: pos, size: size)
     }
 
-    /// 写窗口 frame（CG 坐标）。设置后读回实际值：部分 App 会按自身约束
-    ///（最小尺寸、步进）修正，误差大就再设一次，最多 2 次收敛。
-    /// 返回读回的实际 frame。
+    /// 写窗口 frame（CG 坐标）。写入顺序固定 **尺寸 → 位置 → 尺寸**：
+    /// 先写位置时窗口还是旧尺寸，"移过去会超出屏幕"的 App（终端类实测：Ghostty、
+    /// Terminal）会把位置夹回屏内（x 被夹成 0），尺寸随后缩小也补不回来。
+    /// 先缩到目标尺寸再移动即可绕开这个钳制，末尾再写一次尺寸兜住
+    /// 移动过程中 App 自己的重排。
+    /// 设置后读回实际值：部分 App 会按自身约束（最小尺寸、字符步进）修正，
+    /// 误差大就整轮再来一次，最多 2 轮收敛。返回读回的实际 frame。
     @discardableResult
     func setFrame(_ window: AXUIElement, to rect: CGRect) -> CGRect? {
+        var pos = rect.origin
+        var size = rect.size
+        guard let posValue = AXValueCreate(.cgPoint, &pos),
+              let sizeValue = AXValueCreate(.cgSize, &size)
+        else { return frame(of: window) }
         for _ in 0..<2 {
-            var pos = rect.origin
-            var size = rect.size
-            if let posValue = AXValueCreate(.cgPoint, &pos),
-               let sizeValue = AXValueCreate(.cgSize, &size) {
-                AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, posValue)
-                AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeValue)
-            }
+            AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeValue)
+            AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, posValue)
+            AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeValue)
             if let actual = frame(of: window), actual.approxEquals(rect, tolerance: 3) {
                 return actual
             }
@@ -942,6 +985,27 @@ class TilingController: NSObject {
         hideOverlays()
     }
 
+    /// Bento 自己的状态栏菜单展开期间，分屏整体让路。
+    /// 菜单窗口是本进程的高 layer 窗口，被 onScreenWindows() 的 layer==0 + pid != myPid 过滤掉了，
+    /// tap 只看得见菜单「底下」那个别家窗口的标题栏带——于是落在菜单项上的第 2 次点击
+    /// 会被当成标题栏双击吞掉（自定义视图菜单项因此收不到双击），还顺手把那个无关窗口吸附走。
+    /// 记「最后一次菜单活动的时间」而不是记 bool：万一 menuDidClose 没送到，
+    /// 分屏不能就此永久瘫痪。菜单里每次高亮变化都会续期，所以这是无活动超时，
+    /// 不是绝对超时——菜单被晾着开很久也不会让路失效
+    private var menuTrackingSince: Date?
+    private let menuTrackingGrace: TimeInterval = 120
+
+    /// - Parameter tracking: true = 菜单打开或菜单内有交互（可重复调用，每次续期）
+    func setMenuTracking(_ tracking: Bool) {
+        guard tracking else {
+            menuTrackingSince = nil
+            return
+        }
+        // 首次进入时清干净：菜单开之前攒下的 streak/吞噬标志不该跨过这段
+        if menuTrackingSince == nil { resetInputState() }
+        menuTrackingSince = Date()
+    }
+
     // MARK: 设置（菜单动作调用，改完即落盘）
 
     func setMasterEnabled(_ v: Bool) {
@@ -953,6 +1017,13 @@ class TilingController: NSObject {
     // MARK: 事件处理（event tap 回调，必须极快：默认路径零 AX 调用）
 
     func handleMouse(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        if let since = menuTrackingSince {
+            if Date().timeIntervalSince(since) < menuTrackingGrace {
+                return Unmanaged.passUnretained(event)
+            }
+            // 这么久没有菜单活动，多半是 menuDidClose 丢了——恢复正常，别让分屏一直瘫着
+            menuTrackingSince = nil
+        }
         switch type {
         case .leftMouseDown: return handleMouseDown(event)
         case .leftMouseUp: return handleMouseUp(event)
@@ -961,10 +1032,20 @@ class TilingController: NSObject {
         }
     }
 
+    /// 诊断日志开关：defaults write com.sz.bento TilingDebug -bool YES（重启生效）
+    private let debugEnabled = UserDefaults.standard.bool(forKey: "TilingDebug")
+    private func dlog(_ message: @autoclosure () -> String) {
+        guard debugEnabled else { return }
+        ErrorLog.log("分屏调试: \(message())")
+    }
+
     private func handleMouseDown(_ event: CGEvent) -> Unmanaged<CGEvent>? {
         guard config.masterEnabled, editor == nil else { return Unmanaged.passUnretained(event) }
         let point = event.location // CG 坐标
         let clickState = event.getIntegerValueField(.mouseEventClickState)
+        if debugEnabled, clickState >= 2 {
+            dlog("按下 clickState=\(clickState) point=\(point)")
+        }
 
         // 新的真实按下：先清掉旧的吞噬标志，避免错吞正常点击的抬起造成"鼠标卡住"
         if clickState <= 1 {
@@ -991,31 +1072,55 @@ class TilingController: NSObject {
         }
 
         // AX 负缓存：刚失败/无响应的目标在短时间内直接放行
-        guard !isAxNegativeCached(point) else { return Unmanaged.passUnretained(event) }
+        guard !isAxNegativeCached(point) else {
+            dlog("放行：AX 负缓存命中")
+            return Unmanaged.passUnretained(event)
+        }
 
         // 零成本几何预过滤：不命中任何标题栏高度带就不做 AX 调用
         guard let hit = windowMgr.titlebarHit(at: point, bandHeight: TilingController.titleBarBandHeight) else {
+            dlog("放行：不在任何窗口标题栏带内；候选=\(windowMgr.debugWindowsNear(point))")
             return Unmanaged.passUnretained(event)
         }
+        dlog("命中窗口 pid=\(hit.pid) id=\(hit.windowID) bounds=\(hit.bounds)")
 
         // 红绿灯按钮区（窗口左上 ~80pt；zoom 右缘实测可到 ~68pt，留足余量）不参与
         // 双击吸附：双击关闭/最小化/缩放的第二击必须原样到达 App——按钮的多击跟踪
         // 要等最后一个抬起才触发动作，吞掉它会导致"点击没反应"，窗口反而被吸附走
         guard point.x > hit.bounds.minX + 80 else {
+            dlog("放行：落在红绿灯区")
             return Unmanaged.passUnretained(event)
         }
 
-        guard ensurePermission() else { return Unmanaged.passUnretained(event) }
+        guard ensurePermission() else {
+            dlog("放行：无辅助功能权限")
+            return Unmanaged.passUnretained(event)
+        }
 
         // 通过预过滤才做 AX 命中测试
-        guard let window = windowMgr.axWindow(pid: hit.pid, windowID: hit.windowID, bounds: hit.bounds),
-              windowMgr.isSnappable(window),
-              let frame = windowMgr.frame(of: window) else {
+        guard let window = windowMgr.axWindow(pid: hit.pid, windowID: hit.windowID, bounds: hit.bounds) else {
+            dlog("放行：AX 未找到对应窗口（\(windowMgr.debugAXWindows(pid: hit.pid))）")
             cacheAxNegative(point)
             return Unmanaged.passUnretained(event)
         }
+        guard windowMgr.isSnappable(window) else {
+            dlog("放行：窗口不可吸附（\(windowMgr.debugSnappable(window))）")
+            cacheAxNegative(point)
+            return Unmanaged.passUnretained(event)
+        }
+        guard let frame = windowMgr.frame(of: window) else {
+            dlog("放行：读不到窗口 frame")
+            cacheAxNegative(point)
+            return Unmanaged.passUnretained(event)
+        }
+        dlog("准备吸附 frame=\(frame)")
 
-        toggleSnap(window: window, id: hit.windowID, current: frame, clickPointCG: point)
+        // 写 frame 要多次 AX 往返（尺寸→位置→尺寸，最多两轮），在 tap 回调里同步做
+        // 有回调超时被系统摘掉 tap 的风险；回调只管吞掉这次点击，吸附放到下一个主队列
+        // tick（tap 回调本来就跑在主 runloop 上，先后顺序不变）
+        DispatchQueue.main.async { [weak self] in
+            self?.toggleSnap(window: window, id: hit.windowID, current: frame, clickPointCG: point)
+        }
         swallowClick(at: point)
         return nil // 吞掉这次按下，阻止系统默认的缩放/最小化
     }
@@ -1078,13 +1183,18 @@ class TilingController: NSObject {
     private func toggleSnap(window: AXUIElement, id: CGWindowID, current: CGRect, clickPointCG: CGPoint) {
         // 已处于上次吸附后的实际位置 → 还原（判断用吸附后实际 frame，兼容有最小尺寸限制的窗口）
         if let rec = snapMemory[id], current.approxEquals(rec.snapped, tolerance: 4) {
+            dlog("还原到 \(rec.original)")
             windowMgr.setFrame(window, to: clampedToCurrentScreens(rec.original))
             snapMemory.removeValue(forKey: id)
             return
         }
         // 所在格子 = 与窗口当前可见边界重叠面积最大的格子；无重叠时取光标所在格子
         guard let cell = bestCell(for: CoordConv.fromCG(current), fallbackAppKit: CoordConv.fromCG(clickPointCG))
-        else { return }
+        else {
+            dlog("放行：没找到目标格子")
+            return
+        }
+        dlog("目标格子(AppKit)=\(cell)")
         snap(window: window, id: id, current: current, to: cell)
     }
 
@@ -1093,9 +1203,26 @@ class TilingController: NSObject {
         if snapMemory[id] == nil {
             snapMemory[id] = SnapRecord(original: current, snapped: .zero, lastUsed: Date())
         }
-        if let actual = windowMgr.setFrame(window, to: CoordConv.toCG(cellAppKit)) {
+        let target = CoordConv.toCG(cellAppKit)
+        let stamp = Date()
+        if let actual = windowMgr.setFrame(window, to: target) {
+            dlog("写入 frame 目标=\(target) 实际=\(actual)")
             snapMemory[id]?.snapped = actual
-            snapMemory[id]?.lastUsed = Date()
+        } else {
+            dlog("写入 frame 失败 目标=\(target)")
+        }
+        snapMemory[id]?.lastUsed = stamp
+
+        // 终端这类 App 异步/带动画地应用 frame，同步读回可能是中间态；记错了
+        // "吸附后 frame"，下次双击的还原比对就永远不命中。稍后再读一次落定值。
+        // stamp 比对：其间若已还原（记录被删）或又吸附到别的格子，这次就作废。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self, self.snapMemory[id]?.lastUsed == stamp,
+                  let settled = self.windowMgr.frame(of: window),
+                  settled != self.snapMemory[id]?.snapped
+            else { return }
+            self.dlog("落定 frame=\(settled)")
+            self.snapMemory[id]?.snapped = settled
         }
     }
 
@@ -1199,11 +1326,15 @@ class TilingController: NSObject {
         // 没有实际拖动就不吸附（避免修饰键+单击误触发）
         guard session.didMove, let cell = session.highlightedCellAppKit else { return }
         guard ensurePermission() else { return }
-        guard let window = windowMgr.axWindow(pid: session.pid, windowID: session.windowID, bounds: .zero),
-              windowMgr.isSnappable(window),
-              let current = windowMgr.frame(of: window)
-        else { return }
-        snap(window: window, id: session.windowID, current: current, to: cell)
+        // 同 handleMouseDown：AX 往返不放在 tap 回调里同步做
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  let window = self.windowMgr.axWindow(pid: session.pid, windowID: session.windowID, bounds: .zero),
+                  self.windowMgr.isSnappable(window),
+                  let current = self.windowMgr.frame(of: window)
+            else { return }
+            self.snap(window: window, id: session.windowID, current: current, to: cell)
+        }
     }
 
     // MARK: 网格浮层

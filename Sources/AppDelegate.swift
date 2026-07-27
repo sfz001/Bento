@@ -29,6 +29,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var autoLaunchItem: NSMenuItem!
     // 菜单栏图标管理
     private let iconMgr = MenuBarIconManager()
+    // 防止睡眠
+    private let sleepGuard = SleepGuard()
+    private var permanentSleepItem: NSMenuItem!
+    private var timedSleepItem: NSMenuItem!
+    private var timedSleepSubmenu: NSMenu?
     private var pollTimer: DispatchSourceTimer?
     /// 上一轮轮询的连接状态（nil = 尚未轮询过），用于边沿触发
     private var lastPolledConnected: Bool?
@@ -47,6 +52,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         startScrollReverser(showAlert: true)
         startTiling()
         iconMgr.start()
+        sleepGuard.onStateChange = { [weak self] in self?.refreshSleepGuardState() }
         if remoteMonitorEnabled { startPollTimer() }
     }
 
@@ -136,6 +142,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusMenu.addItem(makeItem("编辑分屏布局…", symbol: "squareshape.split.2x2.dotted", action: #selector(editTilingLayouts)))
 
+        statusMenu.addItem(.sectionHeader(title: "防止睡眠"))
+
+        installSleepGuardItems()
+
         statusMenu.addItem(.sectionHeader(title: "菜单栏图标"))
 
         statusMenu.addItem(makeItem("管理菜单栏图标…", symbol: "menubar.rectangle", action: #selector(openIconManager)))
@@ -151,6 +161,68 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusMenu.addItem(makeItem("退出 Bento", symbol: nil, action: #selector(quitApp), key: "q"))
 
         statusItem.menu = statusMenu
+    }
+
+    // MARK: - 防睡接线
+
+    /// 两个普通菜单项：永久防睡（勾选切换）+ 定时防睡（预设子菜单）。
+    /// 全是原生 NSMenuItem —— 早前那版靠自定义视图区分单击/双击，为一个开关背了
+    /// 乐观 UI、时序锚点、高亮转发、菜单几何反推一整套状态机，还和分屏的事件 tap 打架。
+    private func installSleepGuardItems() {
+        permanentSleepItem = makeItem("永久防睡", symbol: "cup.and.saucer",
+                                      action: #selector(togglePermanentSleep))
+        statusMenu.addItem(permanentSleepItem)
+
+        timedSleepItem = NSMenuItem(title: "定时防睡", action: nil, keyEquivalent: "")
+        timedSleepItem.image = NSImage(systemSymbolName: "timer", accessibilityDescription: nil)
+        let submenu = NSMenu()
+        for preset in SleepGuard.timedPresets {
+            let item = NSMenuItem(title: preset.title, action: #selector(startTimedSleep(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = preset.minutes // 时长直接存 tag，动作里读回来
+            submenu.addItem(item)
+        }
+        submenu.addItem(.separator())
+        // 设置窗口收进子菜单：里面的自定义分钟数本来就属于「定时」这一档，
+        // 模式/低电量都是低频项，不值得在主菜单常驻一行
+        submenu.addItem(makeItem("防睡设置…", symbol: "gearshape", action: #selector(openSleepGuardSettings)))
+        timedSleepItem.submenu = submenu
+        timedSleepSubmenu = submenu
+        statusMenu.addItem(timedSleepItem)
+
+        statusMenu.delegate = self
+    }
+
+    /// 只刷新菜单内的文案与勾选态。**不要**在这里碰 statusItem.button —— 给它重新赋
+    /// image/title 会在菜单正要定位的瞬间改动状态栏按钮几何，菜单会按错位的锚点弹出
+    /// （表现为下拉菜单跑到屏幕右边）。状态栏那一侧由 refreshSleepGuardState 负责。
+    private func updateSleepGuardMenu() {
+        permanentSleepItem?.state = sleepGuard.isPermanent ? .on : .off
+        timedSleepItem?.title = sleepGuard.timedMenuTitle
+        let timedRunning = sleepGuard.isActive && sleepGuard.deadline != nil
+        for item in timedSleepSubmenu?.items ?? [] where item.tag > 0 {
+            item.state = (timedRunning && sleepGuard.sessionMinutes == item.tag) ? .on : .off
+        }
+        SleepGuardSettingsWindow.shared.refreshStatus()
+    }
+
+    /// 防睡状态真的变了才走这条：菜单 + 状态栏图标/tooltip 一起刷
+    private func refreshSleepGuardState() {
+        updateSleepGuardMenu()
+        updateStatus()
+    }
+
+    @objc private func togglePermanentSleep() {
+        sleepGuard.togglePermanent()
+    }
+
+    /// 点已勾选的那项 = 停止，否则按新时长重开
+    @objc private func startTimedSleep(_ sender: NSMenuItem) {
+        sleepGuard.toggleTimed(minutes: sender.tag)
+    }
+
+    @objc private func openSleepGuardSettings() {
+        sleepGuard.openSettingsWindow()
     }
 
     // MARK: - Connection Detection (3s process poll)
@@ -242,7 +314,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             statusMenuItem.image = NSImage(systemSymbolName: "pause.circle", accessibilityDescription: nil)
             statusItem.button?.image = NSImage(systemSymbolName: "eye", accessibilityDescription: nil)
             statusItem.button?.title = ""
-            statusItem.button?.toolTip = "远程熄屏监控已停用"
+            statusItem.button?.toolTip = tooltip("远程熄屏监控已停用")
             return
         }
         if screenCtl.isScreenBlack {
@@ -257,8 +329,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             statusMenuItem.image = NSImage(systemSymbolName: "checkmark.circle", accessibilityDescription: nil)
             statusItem.button?.image = NSImage(systemSymbolName: "eye", accessibilityDescription: nil)
             statusItem.button?.title = ""
-            statusItem.button?.toolTip = "Bento"
+            statusItem.button?.toolTip = tooltip("Bento")
         }
+    }
+
+    /// 防睡是菜单以外唯一的状态出口，tooltip 得带上。
+    /// 「缺权限」「已熄屏」两条分支不带——那两条的信息优先级更高
+    private func tooltip(_ base: String) -> String {
+        guard let short = sleepGuard.shortStatus else { return base }
+        return "\(base) · \(short)"
     }
 
     // MARK: - 分屏接线
@@ -454,4 +533,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+}
+
+extension AppDelegate: NSMenuDelegate {
+    func menuWillOpen(_ menu: NSMenu) {
+        // 子菜单也会走 delegate 转发链，只认主菜单
+        guard menu === statusMenu else { return }
+        // 每次打开都刷一次剩余时间，省得只靠 60s 心跳
+        updateSleepGuardMenu()
+        // 分屏 tap 让路：它的窗口枚举按 pid 过滤掉了 Bento 自己的菜单窗口，
+        // 只看得见菜单「底下」那个别家窗口的标题栏带，会把落在菜单上的点击
+        // 当成标题栏操作吞掉并吸附无关窗口
+        tiling.setMenuTracking(true)
+    }
+
+    /// 鼠标在菜单里移动就给让路续期：否则让路是个绝对超时，菜单被晾着开久了会自行失效
+    func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
+        guard menu === statusMenu else { return }
+        tiling.setMenuTracking(true)
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        guard menu === statusMenu else { return }
+        tiling.setMenuTracking(false)
+    }
 }
