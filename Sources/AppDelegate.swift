@@ -156,19 +156,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         tilingPermissionItem.isHidden = true
         statusMenu.addItem(tilingPermissionItem)
 
-        // 单一总开关：开 = 双击标题栏吸附 + ⌘ 拖动标题栏吸附都可用
+        // 单一总开关：开 = 双击吸附 / Shift 双击铺满屏幕 / Shift 拖动网格吸附 / 甩动铺满屏幕 全部可用
         tilingMasterItem = makeItem("启用分屏", symbol: "uiwindow.split.2x1", action: #selector(toggleTilingMaster))
         statusMenu.addItem(tilingMasterItem)
 
         statusMenu.addItem(makeItem("编辑分屏布局…", symbol: "squareshape.split.2x2.dotted", action: #selector(editTilingLayouts)))
 
+        // 手势提示行（不可点，仅展示）：小字号 + 拆成两行，避免撑宽整个菜单
+        for text in ["双击=吸进格子 · Shift拖=吸附", "Shift双击/甩动=铺满屏幕"] {
+            let hint = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+            hint.attributedTitle = NSAttributedString(string: text, attributes: [
+                .font: NSFont.systemFont(ofSize: 10),
+                .foregroundColor: NSColor.secondaryLabelColor,
+            ])
+            hint.isEnabled = false
+            statusMenu.addItem(hint)
+        }
+
         statusMenu.addItem(.sectionHeader(title: "防止睡眠"))
 
         installSleepGuardItems()
 
-        statusMenu.addItem(.sectionHeader(title: "菜单栏图标"))
-
-        statusMenu.addItem(makeItem("管理菜单栏图标…", symbol: "menubar.rectangle", action: #selector(openIconManager)))
+        // 图标管理已停用（MenuBarIconManager.featureEnabled = false），菜单入口一并隐藏；
+        // 恢复功能时把开关改回 true，这一段就会回来
+        if MenuBarIconManager.featureEnabled {
+            statusMenu.addItem(.sectionHeader(title: "菜单栏图标"))
+            statusMenu.addItem(makeItem("管理菜单栏图标…", symbol: "menubar.rectangle", action: #selector(openIconManager)))
+        }
 
         updateTilingMenuStates()
 
@@ -736,16 +750,20 @@ extension AppDelegate: NSMenuDelegate {
         // 只看得见菜单「底下」那个别家窗口的标题栏带，会把落在菜单上的点击
         // 当成标题栏操作吞掉并吸附无关窗口
         tiling.setMenuTracking(true)
+        // 图标管理（拖拽模式）也让路：合成 ⌘ 拖拽在菜单窗口开着时会打架
+        iconMgr.setStatusMenuOpen(true)
     }
 
     /// 鼠标在菜单里移动就给让路续期：否则让路是个绝对超时，菜单被晾着开久了会自行失效
     func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
         guard menu === statusMenu else { return }
         tiling.setMenuTracking(true)
+        iconMgr.setStatusMenuOpen(true)
     }
 
     func menuDidClose(_ menu: NSMenu) {
         guard menu === statusMenu else { return }
         tiling.setMenuTracking(false)
+        iconMgr.setStatusMenuOpen(false)
     }
 }

@@ -4,24 +4,33 @@ import Foundation
 
 // MARK: - Menu Bar Icon Manager (菜单栏图标管理)
 
-// 实现要点（全部在 macOS 27 上实测验证；26 的 ControlCenter 托管 + 合成 ⌘ 拖拽方案已废弃）：
-// - macOS 27 起菜单栏由独立的 MenuBarAgent 进程整体托管：不再是每图标一个 layer-25
-//   CG 窗口，而是整条菜单栏几个大窗口。图标位置持久化在 com.apple.MenuBarAgent 的
-//   TrailingItemPreferredPositions 字典里：键 = "status:<签名标识>::<autosaveName>"
-//   （正规签名 App 用 bundleID，ad-hoc/无签名用可执行名，故自家条目两种前缀都写），
-//   值 = 距右缘的偏好位置，越大越靠左。外部改写该字典 0.5s 内实时生效（cfprefsd
-//   通知），无需重启 agent、无需任何合成事件。
+// 实现要点（Beta 4 = 26A5388g 实测基线，Beta 5 = 26A5406e 增补；26 的 ControlCenter
+// 托管 + 合成 ⌘ 拖拽方案已废弃）：
+// - macOS 27 起菜单栏由独立的 MenuBarAgent 进程整体托管（Beta 5 起已沙盒化）：不再是
+//   每图标一个 layer-25 CG 窗口，而是整条菜单栏几个大窗口。图标位置持久化在
+//   com.apple.MenuBarAgent 的 TrailingItemPreferredPositions 字典里：键 =
+//   "status:<签名标识>::<autosaveName>"（正规签名 App 用 bundleID，ad-hoc/无签名用
+//   可执行名），值 = 距右缘的偏好位置，越大越靠左。外部改写该字典 ~2s 内实时生效
+//   （cfprefsd 通知），无需重启 agent、无需任何合成事件。
 // - 系统布局算法 = 贪心跳洞：按 position 从小到大自右向左排布，放不下的项跳进
 //   「«」溢出区（chevron 点击展开），然后继续排后面的。没有"截断"——超宽项只会
 //   自己被跳过，挡不住任何人（10000pt hider 方案在 27 上无效，已删除）。
 // - 隐藏 = 赋一个比所有可见项都大的 position（隐藏区 1100+）：拥挤的菜单栏
 //   （刘海 + 行情条这类宽图标）放不下最左侧的它们 → 稳定折叠进溢出区。
 //   局限：空间充裕时隐藏项会重新可见（27 上没有强制隐藏的原语）。
-// - 警惕：agent 会在状态项注册/注销等扰动后用自己算出的"实际距离"整体重写字典
-//   （含溢出/展开态下的瞬态坐标），所以字典数值绝不能当成用户的隐藏意图来采纳
-//   ——隐藏/显示意图只来自本管理器的 UI；字典只用来采纳"可见项的左右顺序"
-//   （实际值忠实反映真实排列，无害）。语义不一致（该隐没隐/顺序不对/条目缺失）
-//   时下一轮回写纠正即可自愈，数值上的漂移不管，避免与 agent 互写打架。
+// - Beta 5 起字典不再是菜单栏的镜像（2026-08-13 实测）：agent 既不动态回收空间
+//   （图标因瞬时拥挤沉进溢出区后，空间空出来也不回来），也几乎不把真实布局回写进
+//   字典（实测 30h 保持外部写入的原值而真实菜单栏早已变化）。全量重排只由字典写入
+//   或状态项注册/注销扰动触发。因此：只信字典的语义校验会长期"看起来全对"而菜单栏
+//   跑偏 → UI 动作后必须无条件回写（forceRewriteOnce + gridPhase 抖动保证字典真的
+//   变了），60s 兜底轮用 AX frame 做真实布局校验兜底。另实测 module:Battery 的写入
+//   在 Beta 5 上被无视（com.apple.controlcenter 域冒出了 NSStatusItem Preferred
+//   Position Battery 等新键 + HasAttemptedMenuBarWorkflowMigration=1，电池可能迁回
+//   ControlCenter 托管，未深挖）——电池被排除在真实布局校验之外，回写救不了它。
+// - 警惕：agent 在扰动后重写字典时用的是自己算出的"实际距离"（含溢出/展开态下的
+//   瞬态坐标），所以字典数值绝不能当成用户的隐藏意图来采纳——隐藏/显示意图只来自
+//   本管理器的 UI；字典只用来采纳"可见项的左右顺序"。语义不一致（该隐没隐/顺序
+//   不对/条目缺失）时回写纠正，数值上的漂移不管，避免与 agent 互写打架。
 // - 身份仍走各 App 的 AXExtrasMenuBar（title/desc），持久化键沿用 bundleID|序号；
 //   系统模块经 module:* 条目管理（时钟/控制中心被系统钉死，除外）。
 
@@ -30,6 +39,11 @@ private let mbaPositionsKey = "TrailingItemPreferredPositions" as CFString
 
 /// 菜单栏图标管理器：枚举/识别图标、维护隐藏集合、钉住 Bento 主图标
 class MenuBarIconManager: NSObject {
+    /// 功能总开关。macOS 27 Beta 5 的拖拽式管理实测后判定太繁琐（每次操作 = 展开溢出条
+    /// → 合成拖拽 → 收起 → 校验，比手工 ⌘ 拖还麻烦），按物主决定停用（2026-08-14）。
+    /// 代码与文档全部保留：恢复时改回 true 即可（菜单入口 / 定时纠偏 / 退出恢复会一并回来）。
+    static let featureEnabled = false
+
     /// 给管理界面用的一行数据
     struct Row: Equatable {
         let key: String
@@ -78,6 +92,45 @@ class MenuBarIconManager: NSObject {
     }
     /// UI 操作触发的一轮 enforce 跳过顺序采纳（别把用户刚拖好的顺序又用旧位置覆盖回去）
     private var suppressAdoptionOnce = false
+    /// UI 操作触发的一轮 enforce 无条件纠正。字典模式=回写字典；拖拽模式=跑拖拽纠偏 session
+    private var forceRewriteOnce = false
+    /// 强制回写时抖动网格基准（100↔101）：desired 与字典现值逐字节相同时，写入
+    /// 可能不产生 cfprefsd 变更通知，agent 便不会重排；抖 1pt 保证字典真的变了（仅字典模式）
+    private var gridPhase = 0.0
+    /// 杠杆：字典（Beta 4 及更早：TrailingItemPreferredPositions 写入被 agent 消费）
+    /// 或合成 ⌘ 拖拽（Beta 5 起：写入只被 cfprefsd 接受、不被 agent 消费，实测菜单栏纹丝不动；
+    /// 拖拽 = 与手工 ⌘ 拖同源的系统手势，实测有效且持久）
+    private enum Lever { case dict, drag }
+    private var lever: Lever = .dict
+    /// 字典模式连续多少轮真实布局纠偏后仍未收敛——达到 3 就永久切换拖拽模式
+    /// （覆盖未知构建：若后续版本恢复消费字典，拖拽模式同样正确，只是动作更多）
+    private var consecutiveRealityCorrections = 0
+    /// 拖拽纠偏 session 进行中（防重入：session 在 queue 上同步执行数秒，
+    /// 期间 3s 计时器照常排队，别让多个 session 叠加）
+    private var correctionInProgress = false
+    /// Bento 状态菜单是否开着：菜单窗口悬在菜单栏下方，合成拖拽会与它打架，开着就跳过纠偏
+    private let menuOpenLock = NSLock()
+    private var _statusMenuOpen = false
+    /// 拖拽模式：键 → pid（读实时 frame 用），enumerateItems 每轮全量刷新
+    private var pidByKey: [String: pid_t] = [:]
+    /// 拖拽模式：放弃集合——连续多次拖不动/校验不过的键不再每轮纠偏（只观测 + 记一次日志），
+    /// UI 动作（开关/排序/全部恢复）时清空重试
+    private var dragFailCounts: [String: Int] = [:]
+    private var dragGiveUp: Set<String> = []
+    /// 首次观察到溢出条展开的时间（60s 宽限后由 enforcer 收起）
+    private var stripExpandedSince: Date?
+    /// 拥挤接受集合：菜单栏空间不足时（该可见宽度总和 > 在栏宽度总和 + 余量），
+    /// 沉底是物理必然，纠偏只会让最左项轮流沉底——这些键只观测不再纠偏；
+    /// 空间恢复（用户隐藏了别的项）或 UI 操作时清空重试
+    private var acceptedSunk: Set<String> = []
+    /// 真实布局校验（60s 兜底轮）状态：上次发现的问题集合 + 指数退避的下次纠偏时间。
+    /// 真放不下的项（或 module:Battery 这类写入被无视的键）会让纠偏回写永远无效，
+    /// 不退避就是每分钟白写一次、每次还把隐藏项抖出来
+    private var lastRealityProblems: Set<String> = []
+    private var realityBackoff: TimeInterval = 60
+    private var nextRealityRewrite = Date.distantPast
+    /// 隐藏项因菜单栏宽松而弹出可见（无解，只观测）：集合变化时才记日志
+    private var loggedPopoutHidden: Set<String> = []
     /// 变更检测：agent 字典 + 运行中 App 集合的签名；没变且未超兜底间隔就跳过 AX 枚举（重活）
     private var lastSignature = 0
     private var lastFullPass = Date.distantPast
@@ -101,6 +154,11 @@ class MenuBarIconManager: NSObject {
     // MARK: 生命周期
 
     func start() {
+        guard Self.featureEnabled else { return }
+        lever = Self.decideInitialLever()
+        if lever == .drag {
+            ErrorLog.log("图标管理: 本构建菜单栏字典杠杆已失效，启用拖拽模式（合成 ⌘ 拖拽）")
+        }
         // 首次延迟 2s，等菜单栏和自己图标就位
         queue.asyncAfter(deadline: .now() + 2) { [weak self] in self?.enforce() }
         let t = Timer(timeInterval: 3, repeats: true) { [weak self] _ in
@@ -108,6 +166,16 @@ class MenuBarIconManager: NSObject {
         }
         RunLoop.main.add(t, forMode: .common)
         timer = t
+    }
+
+    /// 初始杠杆选择：26A5406e（Beta 5）起字典写入不再被消费，直接走拖拽；
+    /// 更早构建走字典；未知的未来构建先走字典，连续纠偏无效时自动切换（见 enforce）
+    private static func decideInitialLever() -> Lever {
+        let v = ProcessInfo.processInfo.operatingSystemVersionString
+        guard let r = v.range(of: "(Build ") else { return .dict }
+        let rest = v[r.upperBound...]
+        let build = String(rest.prefix(while: { $0 != ")" }))
+        return build >= "26A5406e" ? .drag : .dict
     }
 
     func stop() {
@@ -149,6 +217,7 @@ class MenuBarIconManager: NSObject {
     private struct ExtraItem {
         let title: String
         let desc: String
+        let frame: CGRect? // AX 全局坐标（左上原点）；读不到 position 时 nil
     }
 
     /// 读某个进程的 AXExtrasMenuBar 子元素
@@ -165,17 +234,24 @@ class MenuBarIconManager: NSObject {
         AXUIElementCopyAttributeValue(bar as! AXUIElement, kAXChildrenAttribute as CFString, &children)
         var out: [ExtraItem] = []
         for el in children as? [AXUIElement] ?? [] {
-            var title: AnyObject?, desc: AnyObject?, size: AnyObject?
+            var title: AnyObject?, desc: AnyObject?, size: AnyObject?, pos: AnyObject?
             AXUIElementCopyAttributeValue(el, kAXTitleAttribute as CFString, &title)
             AXUIElementCopyAttributeValue(el, kAXDescriptionAttribute as CFString, &desc)
             AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &size)
+            AXUIElementCopyAttributeValue(el, kAXPositionAttribute as CFString, &pos)
             var s = CGSize.zero
             if let size, CFGetTypeID(size) == AXValueGetTypeID() {
                 AXValueGetValue(size as! AXValue, .cgSize, &s)
             }
             guard s.width > 0 else { continue } // 无尺寸的是占位/系统隐藏项
+            var frame: CGRect?
+            var p = CGPoint.zero
+            if let pos, CFGetTypeID(pos) == AXValueGetTypeID(), AXValueGetValue(pos as! AXValue, .cgPoint, &p) {
+                frame = CGRect(origin: p, size: s)
+            }
             out.append(ExtraItem(title: (title as? String) ?? "",
-                                 desc: (desc as? String) ?? ""))
+                                 desc: (desc as? String) ?? "",
+                                 frame: frame))
         }
         return out
     }
@@ -186,6 +262,7 @@ class MenuBarIconManager: NSObject {
         let displayName: String
         let stableName: String   // 不含易变部分（行情/角标）的名字，进 iconNames 持久化缓存
         let entryKeys: [String]  // 它在 agent 字典里的条目键（现有配对的，或新建候选）
+        var frame: CGRect? = nil // AX 真实 frame（真实布局校验用）；nil = 读不到/不适用
     }
 
     /// 枚举所有第三方图标，并解析每个图标在 agent 字典里的条目键。
@@ -262,8 +339,11 @@ class MenuBarIconManager: NSObject {
                 } else {
                     entryKeys = ["\(active.0)Item-\(idx)"]
                 }
-                out.append(LiveItem(key: "\(bundleID)|\(idx + 1)", displayName: name,
-                                    stableName: appName, entryKeys: entryKeys))
+                let rowKey = "\(bundleID)|\(idx + 1)"
+                pidByKey[rowKey] = pid // 拖拽模式读实时 frame 用
+                out.append(LiveItem(key: rowKey, displayName: name,
+                                    stableName: appName, entryKeys: entryKeys,
+                                    frame: extra.frame))
             }
         }
         // 只保留还活着的 pid，防止长时间运行后集合无限膨胀（pid 会被系统复用）
@@ -279,29 +359,66 @@ class MenuBarIconManager: NSObject {
         "com.apple.menuextra.clock": "Clock",
         "com.apple.menuextra.user": "UserSwitcher",
         "com.apple.menuextra.controlcenter": "BentoBox", // 控制中心的内部名，纯属巧合
+        "com.apple.menuextra.now-playing": "NowPlaying",
     ]
-    /// 系统钉死不吃 position 写入的模块（实测：改写被无视、frame 不动）——不纳入管理
-    private static let pinnedModules: Set<String> = [
-        "com.apple.menuextra.clock",
-        "com.apple.menuextra.controlcenter",
-    ]
+    /// 系统钉死、完全动不了的模块（时钟/控制中心实测连拖拽都不吃）——不纳入管理。
+    /// 电池在 Beta 5 对字典写入免疫，但合成 ⌘ 拖拽与手工拖拽同源、实测可动，
+    /// 所以只有字典模式才把它当钉死（拖拽模式恢复正常管理）
+    private var pinnedModules: Set<String> {
+        var pinned: Set<String> = ["com.apple.menuextra.clock", "com.apple.menuextra.controlcenter"]
+        if lever == .dict { pinned.insert("com.apple.menuextra.battery") }
+        return pinned
+    }
 
-    /// 枚举 MenuBarAgent 托管的系统模块（电池/Wi‑Fi/用户切换…），键直接用 module: 条目键
-    private func enumerateModules(positions: [String: Double], mbaApp: NSRunningApplication) -> [LiveItem] {
+    /// 枚举 MenuBarAgent 托管的系统模块（电池/Wi‑Fi/用户切换…），键直接用 module: 条目键。
+    /// 顺路带回「«」按钮（AXButton，desc 含"隐藏菜单栏项目"）的 frame：收起态溢出项的
+    /// AX frame 是堆叠在这个按钮矩形上的鬼影（AssignCollapsedOverflowFramesPass），
+    /// 与它相交 = 沉在溢出区——真实布局校验的关键判据
+    private func enumerateModules(positions: [String: Double], mbaApp: NSRunningApplication) -> (items: [LiveItem], chevron: CGRect?) {
         let mba = mbaApp
-        var found: [(id: String, desc: String)] = []
+        var found: [(id: String, desc: String, frame: CGRect?)] = []
+        var chevron: CGRect?
         func walk(_ el: AXUIElement, _ depth: Int) {
             guard depth <= 5 else { return }
             var roleV: AnyObject?, identV: AnyObject?
             AXUIElementCopyAttributeValue(el, kAXRoleAttribute as CFString, &roleV)
             // 第二个宿主窗口里挂着各 App 的 AX 代理树，別往里钻（又大又慢）
             if depth > 0, roleV as? String == "AXApplication" { return }
-            AXUIElementCopyAttributeValue(el, kAXIdentifierAttribute as CFString, &identV)
-            if let ident = identV as? String, ident.hasPrefix("com.apple.menuextra.") {
+            if chevron == nil, roleV as? String == "AXButton" {
                 var descV: AnyObject?
                 AXUIElementCopyAttributeValue(el, kAXDescriptionAttribute as CFString, &descV)
+                if let desc = descV as? String, desc.contains("隐藏菜单栏项目") || desc.lowercased().contains("hidden menu bar") {
+                    var posV: AnyObject?, sizeV: AnyObject?
+                    AXUIElementCopyAttributeValue(el, kAXPositionAttribute as CFString, &posV)
+                    AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &sizeV)
+                    var p = CGPoint.zero
+                    var s = CGSize.zero
+                    if let posV, CFGetTypeID(posV) == AXValueGetTypeID(),
+                       let sizeV, CFGetTypeID(sizeV) == AXValueGetTypeID(),
+                       AXValueGetValue(posV as! AXValue, .cgPoint, &p),
+                       AXValueGetValue(sizeV as! AXValue, .cgSize, &s), s.width > 0 {
+                        chevron = CGRect(origin: p, size: s)
+                    }
+                }
+            }
+            AXUIElementCopyAttributeValue(el, kAXIdentifierAttribute as CFString, &identV)
+            if let ident = identV as? String, ident.hasPrefix("com.apple.menuextra.") {
+                var descV: AnyObject?, posV: AnyObject?, sizeV: AnyObject?
+                AXUIElementCopyAttributeValue(el, kAXDescriptionAttribute as CFString, &descV)
+                AXUIElementCopyAttributeValue(el, kAXPositionAttribute as CFString, &posV)
+                AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &sizeV)
+                var p = CGPoint.zero
+                var s = CGSize.zero
+                var frame: CGRect?
+                if let posV, CFGetTypeID(posV) == AXValueGetTypeID(),
+                   let sizeV, CFGetTypeID(sizeV) == AXValueGetTypeID(),
+                   AXValueGetValue(posV as! AXValue, .cgPoint, &p),
+                   AXValueGetValue(sizeV as! AXValue, .cgSize, &s),
+                   s.width > 0 {
+                    frame = CGRect(origin: p, size: s)
+                }
                 if !found.contains(where: { $0.id == ident }) {
-                    found.append((ident, (descV as? String) ?? ""))
+                    found.append((ident, (descV as? String) ?? "", frame))
                 }
                 return
             }
@@ -315,18 +432,27 @@ class MenuBarIconManager: NSObject {
         for w in windows as? [AXUIElement] ?? [] { walk(w, 0) }
 
         var out: [LiveItem] = []
-        for (id, desc) in found where !Self.pinnedModules.contains(id) {
+        for (id, desc, frame) in found where !pinnedModules.contains(id) {
             let short = String(id.dropFirst("com.apple.menuextra.".count))
             let name = Self.moduleKeyMap[id] ?? (short.prefix(1).uppercased() + short.dropFirst())
-            // 实例可能带 -0 后缀（如 module:BentoBox-0）；字典里找不到条目就不管理
-            guard let entryKey = ["module:\(name)", "module:\(name)-0"].first(where: { positions[$0] != nil })
-            else { continue }
+            // 实例可能带 -0 后缀（如 module:BentoBox-0）。字典模式只在字典里有条目时管理；
+            // 拖拽模式不依赖字典（写入已被 agent 无视），但只对已知映射的 id 合成条目，
+            // 未知 id 的模块不冒然纳入
+            let entryKey: String
+            if let k = ["module:\(name)", "module:\(name)-0"].first(where: { positions[$0] != nil }) {
+                entryKey = k
+            } else if lever == .drag, Self.moduleKeyMap[id] != nil {
+                entryKey = "module:\(name)"
+            } else {
+                continue
+            }
             // desc 可能带实时状态（"Wi‑Fi，已接入，3格"），截到第一个逗号
             let clean = desc.split(separator: "，").first.map(String.init) ?? desc
             let display = clean.isEmpty ? name : clean
-            out.append(LiveItem(key: entryKey, displayName: display, stableName: display, entryKeys: [entryKey]))
+            out.append(LiveItem(key: entryKey, displayName: display, stableName: display,
+                                entryKeys: [entryKey], frame: frame))
         }
-        return out
+        return (out, chevron)
     }
 
     /// 图标当前生效位置：条目键的任一现值
@@ -337,9 +463,19 @@ class MenuBarIconManager: NSObject {
         return nil
     }
 
+    /// 收起态 frame 是否在栏（含 chevron 鬼影卫兵）。收起态下溢出项的鬼影堆叠在
+    /// chevron 上、看起来完全在栏（y=5、x 合理）；但宽图标（行情条 200pt）会真实地
+    /// 横跨 chevron——两者都「与 chevron 相交」，只能用「窄 + 左缘贴着 chevron」区分鬼影
+    private func onBarCollapsed(_ f: CGRect?, chevron: CGRect?, mainWidth: CGFloat) -> Bool {
+        guard let f, f.width > 0 else { return false }
+        if let ch = chevron, f.width <= 90, f.minX > ch.minX - 36, f.intersects(ch) { return false }
+        return f.minY >= 0 && f.maxY <= 44 && f.minX >= 0 && f.maxX <= mainWidth
+    }
+
     // MARK: 状态纠正（每 3s，后台线程）
 
     private func enforce(force: Bool = false) {
+        guard Self.featureEnabled else { return }
         guard AXIsProcessTrustedWithOptions(nil) else {
             publishPermissionState(missing: true)
             return
@@ -351,6 +487,24 @@ class MenuBarIconManager: NSObject {
         else { return }
         let skipAdoption = suppressAdoptionOnce
         suppressAdoptionOnce = false
+        let uiForcedRewrite = forceRewriteOnce
+        forceRewriteOnce = false
+
+        // 溢出条开着时收起态判定不可信（隐藏项在展开条里拿到真实 frame，会被当成"该隐未隐"），
+        // 先收起再评估。Beta 5 实测展开条不会自动收起——不主动收，纠偏会永久停摆。
+        // 但用户刚点开的展开条可能是想手动拖图标，给 60s 宽限再收（别秒收跟用户打架）
+        if lever == .drag, !correctionInProgress, !statusMenuOpen {
+            if isStripExpanded() {
+                if stripExpandedSince == nil { stripExpandedSince = Date() }
+                if Date().timeIntervalSince(stripExpandedSince!) > 60 {
+                    if let ch = chevronRect(false) { click(CGPoint(x: ch.midX, y: ch.midY)) }
+                    Thread.sleep(forTimeInterval: 1.5)
+                    stripExpandedSince = nil
+                }
+            } else {
+                stripExpandedSince = nil
+            }
+        }
 
         let positions = readRawPositions().compactMapValues { ($0 as? NSNumber)?.doubleValue }
         let runningIDs = runningApps.compactMap(\.bundleIdentifier).sorted()
@@ -369,7 +523,8 @@ class MenuBarIconManager: NSObject {
 
         let (thirdParty, junkKeys) = enumerateItems(positions: positions, runningApps: runningApps, fullProbe: stale)
         var items = thirdParty
-        items += enumerateModules(positions: positions, mbaApp: mbaApp)
+        let (moduleItems, chevronFrame) = enumerateModules(positions: positions, mbaApp: mbaApp)
+        items += moduleItems
         // Bento 本尊也作为一行参与排序（不可隐藏，setRowHidden 与采纳都有防御）
         items.append(LiveItem(key: "bento:main", displayName: "Bento", stableName: "Bento",
                               entryKeys: ownEntryKeys("BentoMain", positions: positions)))
@@ -387,17 +542,31 @@ class MenuBarIconManager: NSObject {
         let hiddenBase = 1100.0             // 隐藏区起点
         let hiddenThreshold = 1050.0        // 隐藏区判定线（仅用于语义校验，不用于采纳意图）
 
-        // —— 采纳（只采纳顺序，绝不采纳隐藏状态）：agent 会在状态项注册/注销后
-        // 用瞬态实际坐标整体重写字典，位置数值不能当隐藏意图；隐藏/显示只听 UI。
-        // 顺序采纳每轮必做（含启动首轮）：菜单栏实际排列是顺序的事实来源，
+        // —— 采纳（只采纳顺序，绝不采纳隐藏状态）：菜单栏实际排列是顺序的事实来源，
         // 决不能反过来用陈旧的持久化顺序去重排用户的菜单栏。
-        let placed: [(key: String, pos: Double)] = items.compactMap { it in
-            currentPos(of: it, in: positions).map { (it.key, $0) }
+        // 字典模式的位置源 = 字典位置值（越大越靠左）；拖拽模式 = 收起态真实 frame 的 x
+        // （左小右大，与 chevron 相交的沉底鬼影剔除）。
+        // 溢出条展开时（用户点开了「«」）frame 是展开态布局，不作为采纳依据——顺序会错乱
+        let stripExpandedNow = isStripExpanded()
+        let mainWidth = CGDisplayBounds(CGMainDisplayID()).width
+        let placed: [(key: String, pos: Double)]
+        let posDescending: Bool
+        if lever == .drag {
+            placed = items.compactMap { it in
+                onBarCollapsed(it.frame, chevron: chevronFrame, mainWidth: mainWidth)
+                    ? (it.key, Double(it.frame!.midX)) : nil
+            }
+            posDescending = false
+        } else {
+            placed = items.compactMap { it in
+                currentPos(of: it, in: positions).map { (it.key, $0) }
+            }
+            posDescending = true
         }
-        if !skipAdoption {
-            // 可见图标按位置降序 = 左→右；只重排 iconOrder 中这些键的相对顺序
+        if !skipAdoption, !stripExpandedNow {
+            // 可见图标按位置排序 = 左→右；只重排 iconOrder 中这些键的相对顺序
             let newVisibleOrder = placed.filter { !hiddenKeys.contains($0.key) }
-                .sorted { $0.pos > $1.pos }.map(\.key)
+                .sorted { posDescending ? $0.pos > $1.pos : $0.pos < $1.pos }.map(\.key)
             let visibleSet = Set(newVisibleOrder).intersection(iconOrder)
             var pending = newVisibleOrder.filter { visibleSet.contains($0) }
             var reordered = iconOrder
@@ -412,7 +581,7 @@ class MenuBarIconManager: NSObject {
         // 新出现的键按当前实际位置插入顺序表：从右往左处理，各自插到右邻之前，
         // 顺序表首次接管系统模块/本尊时不会打乱它们的现有排列
         // 在本地副本上改，循环外一次性赋值：didSet 每次赋值都写 UserDefaults，逐元素改会写放大
-        let posOrder = placed.sorted { $0.pos > $1.pos }.map(\.key) // 左→右
+        let posOrder = placed.sorted { posDescending ? $0.pos > $1.pos : $0.pos < $1.pos }.map(\.key) // 左→右
         var order = iconOrder
         for key in posOrder.reversed() where !order.contains(key) {
             if let idx = posOrder.firstIndex(of: key),
@@ -423,8 +592,17 @@ class MenuBarIconManager: NSObject {
                 order.append(key)
             }
         }
-        // 连字典条目都还没有的全新图标：追加到末尾
+        // 连位置都还没有的全新图标：追加到末尾
         for item in items where !order.contains(item.key) { order.append(item.key) }
+        // 拖拽模式的新键按真实 membership 初始化意图（在栏=可见，沉底=隐藏）：Beta 5 字典
+        // 不再反映真实布局，没有历史意图的图标（比如系统刚冒出来的模块）不能默认弹到栏上
+        if lever == .drag, !stripExpandedNow {
+            for item in items where !iconOrder.contains(item.key) && !hiddenKeys.contains(item.key) {
+                if !onBarCollapsed(item.frame, chevron: chevronFrame, mainWidth: mainWidth) {
+                    hiddenKeys.insert(item.key)
+                }
+            }
+        }
         if order != iconOrder { iconOrder = order }
         // 名字缓存（App 退出后隐藏行还得有名字）：只存稳定名，行情/角标这类易变文本不进磁盘
         var names = iconNames
@@ -435,13 +613,102 @@ class MenuBarIconManager: NSObject {
         let visibleList = iconOrder.filter { present.contains($0) && !hiddenKeys.contains($0) }
         let hiddenList = iconOrder.filter { present.contains($0) && hiddenKeys.contains($0) }
 
+        // —— 真实布局校验（60s 兜底轮，Beta 5 起必需）：agent 不再动态回收空间、也不把
+        // 真实布局回写字典，字典可以长期"看起来全对"而真实菜单栏早已跑偏（可见项沉在
+        // 溢出区、左右顺序不符）。唯一的真相来源是 AX frame。发现问题就强制回写触发
+        // 全量重排；问题集合不变时指数退避（60s→30min）——真放不下的项会让回写永远
+        // 无效，不退避就是每分钟白写一次、每次还可能把隐藏项抖出来。
+        // 判定假设主屏菜单栏（x ∈ [0, 主屏宽]，y ∈ [0, 44]，与 chevron 卫兵一致）；
+        // 溢出区展开态（»）下沉底项会短暂拿到在栏 frame 而漏判——瞬态，无害
+        // 显示器休眠时 agent 的 AX 树整体为空（实测：窗口在、无子元素、frame 全无）——
+        // 此时所有项都会被误判"沉底"，整夜做无意义纠偏。有任何一个 frame 才可信
+        var realityForced = false
+        if stale, !stripExpandedNow, items.contains(where: { $0.frame != nil }) {
+            // 收起态溢出项的 frame 是堆叠在「«」按钮矩形上的鬼影（看起来完全"在栏上"，
+            // y=5、x 合理）——与 chevron 相交即视为沉底，不算在栏（宽图标横跨 chevron
+            // 的例外见 onBarCollapsed）。「«」不存在（无溢出）时按无鬼影处理
+            func onBar(_ f: CGRect?) -> Bool {
+                onBarCollapsed(f, chevron: chevronFrame, mainWidth: mainWidth)
+            }
+            // 问题签名只含键与顺序（不含坐标——行情图标宽度每轮都在变，坐标进签名会
+            // 让退避永远重置）；坐标只进日志
+            var problems = Set<String>()
+            var details: [String] = []
+            let onBarKeys = visibleList.filter { onBar(byKey[$0]?.frame) }
+            // 拥挤判定（仅拖拽模式）：该可见的宽度总和明显大于目前在栏的宽度总和 = 栏真满了。
+            // agent 的 pack 上限 + 200pt 行情条下，最左项沉底是物理必然，纠偏只会轮流沉底
+            let intendedWidth = visibleList.reduce(0.0) { $0 + (byKey[$1]?.frame?.width ?? 0) }
+            let onBarWidth = onBarKeys.reduce(0.0) { $0 + (byKey[$1]!.frame!.width) }
+            if lever == .drag, intendedWidth > onBarWidth + 30 {
+                let sunk = visibleList.filter { !onBarKeys.contains($0) && byKey[$0]?.frame != nil }
+                let newly = sunk.filter { !acceptedSunk.contains($0) }
+                if !newly.isEmpty {
+                    ErrorLog.log("图标管理: 菜单栏空间不足，接受沉底（不再纠偏）：\(newly.sorted().joined(separator: "、"))")
+                }
+                acceptedSunk = Set(sunk)
+            } else {
+                acceptedSunk = []
+            }
+            for key in visibleList {
+                // Bento 本尊经自家 AX 读不到 frame，排除。拖拽模式不依赖字典条目
+                // （entryKeys 只对字典回写有意义），配对失败的第三方也能纠偏。
+                // 拥挤被接受的键跳过（纠偏只会轮流沉底）
+                guard let item = byKey[key],
+                      lever == .drag || !item.entryKeys.isEmpty,
+                      key != "bento:main",
+                      !acceptedSunk.contains(key),
+                      !onBar(item.frame) else { continue }
+                problems.insert("沉底:\(key)")
+                let f = item.frame.map { "(\(Int($0.minX)),\(Int($0.minY)),\(Int($0.width))×\(Int($0.height)))" } ?? "无frame"
+                details.append("\(key)\(f) 沉底")
+            }
+            let realOrder = onBarKeys.sorted { byKey[$0]!.frame!.minX < byKey[$1]!.frame!.minX }
+            if realOrder != onBarKeys {
+                problems.insert("实序:" + realOrder.joined(separator: ">"))
+                details.append("实际顺序 \(realOrder.joined(separator: " > ")) ≠ 期望 \(onBarKeys.joined(separator: " > "))")
+            }
+            if !problems.isEmpty, problems != lastRealityProblems || Date() >= nextRealityRewrite {
+                realityForced = true
+                ErrorLog.log("图标管理: 真实布局校验不符（\(details.joined(separator: "、"))），强制纠偏")
+                realityBackoff = problems == lastRealityProblems ? min(realityBackoff * 2, 1800) : 60
+                nextRealityRewrite = Date().addingTimeInterval(realityBackoff)
+            } else if problems.isEmpty, !lastRealityProblems.isEmpty {
+                ErrorLog.log("图标管理: 真实布局校验恢复正常")
+                realityBackoff = 60
+                nextRealityRewrite = .distantPast
+            }
+            lastRealityProblems = problems
+            // 隐藏项因菜单栏空间充裕被贪心填充带出来：27 无强制隐藏原语，回写无解，只观测
+            let popped = Set(hiddenList.filter { onBar(byKey[$0]?.frame) })
+            if !popped.isEmpty, popped != loggedPopoutHidden {
+                ErrorLog.log("图标管理: 隐藏项因菜单栏空间充裕而可见：\(popped.sorted().joined(separator: "、"))（需拥挤才折叠）")
+            }
+            loggedPopoutHidden = popped
+        }
+
+        // —— 拖拽模式：问题 → 拖拽纠偏 session。绝不写字典：Beta 5 起字典写入不被
+        // agent 消费，写了只会触发无意义重排
+        if lever == .drag {
+            if uiForcedRewrite || realityForced {
+                runDragCorrection(visibleList: visibleList, hiddenList: hiddenList,
+                                  byKey: byKey, chevronFrame: chevronFrame,
+                                  enforceOrder: uiForcedRewrite)
+            }
+            lastSignature = signature
+            publishRows(byKey: byKey)
+            return
+        }
+
+        // —— 字典模式（Beta 4 及更早：写入被 agent 消费）——
+        if uiForcedRewrite || realityForced { gridPhase = gridPhase == 0 ? 1 : 0 }
+
         // —— 期望布局（右端位置值最小；间距 8 留出手动拖拽的插入空间）——
         var desired: [(keys: [String], pos: Double)] = []
         for (i, key) in visibleList.reversed().enumerated() {
-            desired.append((byKey[key]!.entryKeys, base + Double(i) * 8))
+            desired.append((byKey[key]!.entryKeys, base + gridPhase + Double(i) * 8))
         }
         for (j, key) in hiddenList.reversed().enumerated() {
-            desired.append((byKey[key]!.entryKeys, hiddenBase + Double(j) * 8))
+            desired.append((byKey[key]!.entryKeys, hiddenBase + gridPhase + Double(j) * 8))
         }
 
         // —— 语义校验：只在“该隐没隐/该显没显/顺序不对/条目缺失/没钉住”时才回写，
@@ -467,6 +734,10 @@ class MenuBarIconManager: NSObject {
             currentPos(of: byKey[k]!, in: positions) != nil
         }) { writeReasons.append("可见顺序不符") }
         if !junkKeys.isEmpty { writeReasons.append("清理幻影键 \(junkKeys.count) 个") }
+        // Beta 5 起 agent 只在字典写入时才全量重排：UI 动作与真实布局纠偏都无条件回写，
+        // 不依赖上面的字典语义校验（字典已不再镜像真实菜单栏，"看起来全对"不可信）
+        if uiForcedRewrite { writeReasons.append("UI 操作强制重排") }
+        if realityForced { writeReasons.append("真实布局纠偏") }
 
         var finalPositions = positions
         if !writeReasons.isEmpty {
@@ -493,14 +764,414 @@ class MenuBarIconManager: NSObject {
         finalHasher.combine(runningIDs)
         lastSignature = finalHasher.finalize()
 
+        // 连续真实布局纠偏无效 → 字典杠杆已死（agent 不再消费写入），永久切拖拽模式。
+        // 拖拽模式同样正确、只是动作更多；未知的未来构建靠这个兜底
+        if realityForced {
+            consecutiveRealityCorrections += 1
+            if consecutiveRealityCorrections >= 3 {
+                lever = .drag
+                consecutiveRealityCorrections = 0
+                ErrorLog.log("图标管理: 字典杠杆连续 3 轮纠偏无效（agent 不再消费写入），切换为拖拽模式")
+            }
+        } else {
+            consecutiveRealityCorrections = 0
+        }
+
         // UI 操作后若溢出区正处于展开态（»），主动收起，让用户立刻看到隐藏结果；
         // 否则展开条会把刚隐藏的图标继续显示最长约一分钟（自动收起前），像是隐藏没生效
-        if skipAdoption {
+        if skipAdoption, lever == .dict {
             queue.asyncAfter(deadline: .now() + 0.8) { self.collapseChevronIfExpanded() }
         }
 
         publishRows(byKey: byKey)
+        // 刚在上一段从字典模式切换过来：当轮就补一次拖拽纠偏，别让用户再等 60s
+        if lever == .drag, uiForcedRewrite || realityForced {
+            runDragCorrection(visibleList: visibleList, hiddenList: hiddenList,
+                              byKey: byKey, chevronFrame: chevronFrame,
+                              enforceOrder: uiForcedRewrite)
+        }
     }
+
+    // MARK: - 拖拽杠杆（Beta 5+：字典写入已不被 agent 消费）
+
+    /// 合成输入必须跑在主线程：实测后台队列线程上的 warp+post 会被窗口服务器静默丢弃
+    /// （同样的序列在主线程上正常）。队列线程只做逻辑/AX/runloop 等待，投递统一桥过来。
+    /// 桥接用 semaphore 阻塞队列线程：主线程正在等队列的唯一场景是 prepareForQuit，
+    /// 那里改成了 RunLoop 轮转等待，不会互相锁死
+    private func onMainSync(_ body: @escaping () -> Void) {
+        if Thread.isMainThread { body(); return }
+        let sem = DispatchSemaphore(value: 0)
+        DispatchQueue.main.async { body(); sem.signal() }
+        sem.wait()
+    }
+
+    /// Bento 状态菜单开着时不做纠偏（菜单窗口悬在菜单栏下，合成拖拽会与它打架）
+    func setStatusMenuOpen(_ open: Bool) {
+        menuOpenLock.lock(); _statusMenuOpen = open; menuOpenLock.unlock()
+    }
+    private var statusMenuOpen: Bool {
+        menuOpenLock.lock(); defer { menuOpenLock.unlock() }
+        return _statusMenuOpen
+    }
+
+    /// 实时窗口：agent 的三个 AX 窗口里唯一挂状态项 AXButton 的那个（另两个是收起视图的
+    /// AXApplication 占位代理）。它的内容跟随当前状态：收起=真实按钮+chevron 鬼影，展开=展开条
+    private func liveWindow() -> AXUIElement? {
+        guard let mba = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.MenuBarAgent").first
+        else { return nil }
+        let app = AXUIElementCreateApplication(mba.processIdentifier)
+        var windowsV: AnyObject?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsV) == .success,
+              let wins = windowsV as? [AXUIElement] else { return nil }
+        for w in wins {
+            var children: AnyObject?
+            AXUIElementCopyAttributeValue(w, kAXChildrenAttribute as CFString, &children)
+            for wrap in children as? [AXUIElement] ?? [] {
+                var kids: AnyObject?
+                AXUIElementCopyAttributeValue(wrap, kAXChildrenAttribute as CFString, &kids)
+                for kid in kids as? [AXUIElement] ?? [] {
+                    var role: AnyObject?
+                    AXUIElementCopyAttributeValue(kid, kAXRoleAttribute as CFString, &role)
+                    if role as? String == "AXButton" { return w }
+                }
+            }
+        }
+        return wins.count >= 2 ? wins[1] : wins.first
+    }
+
+    /// 实时窗口里的状态元素（模块 AXMenuBarItem / Bento 按钮 / chevron 按钮）
+    private struct AgentElement {
+        let role: String
+        let ident: String
+        let desc: String
+        let frame: CGRect
+    }
+
+    private func agentElements() -> [AgentElement] {
+        guard let w = liveWindow() else { return [] }
+        var out: [AgentElement] = []
+        func walk(_ el: AXUIElement, _ depth: Int) {
+            guard depth <= 6 else { return }
+            var roleV: AnyObject?, identV: AnyObject?, descV: AnyObject?, pV: AnyObject?, sV: AnyObject?
+            AXUIElementCopyAttributeValue(el, kAXRoleAttribute as CFString, &roleV)
+            AXUIElementCopyAttributeValue(el, kAXIdentifierAttribute as CFString, &identV)
+            AXUIElementCopyAttributeValue(el, kAXDescriptionAttribute as CFString, &descV)
+            AXUIElementCopyAttributeValue(el, kAXPositionAttribute as CFString, &pV)
+            AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &sV)
+            let role = roleV as? String ?? ""
+            var p = CGPoint.zero, s = CGSize.zero
+            if let pV, CFGetTypeID(pV) == AXValueGetTypeID() { AXValueGetValue(pV as! AXValue, .cgPoint, &p) }
+            if let sV, CFGetTypeID(sV) == AXValueGetTypeID() { AXValueGetValue(sV as! AXValue, .cgSize, &s) }
+            if s.width > 0 {
+                out.append(AgentElement(role: role, ident: (identV as? String) ?? "",
+                                        desc: (descV as? String) ?? "", frame: CGRect(origin: p, size: s)))
+            }
+            if depth > 0, role == "AXApplication" { return }
+            var children: AnyObject?
+            AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &children)
+            for kid in children as? [AXUIElement] ?? [] { walk(kid, depth + 1) }
+        }
+        walk(w, 0)
+        return out
+    }
+
+    /// 找 chevron 按钮：expand = 「显示隐藏菜单栏项目」（点击=展开），否则「隐藏菜单栏项目」（点击=收起）
+    private func chevronRect(_ expand: Bool) -> CGRect? {
+        let wanted = expand ? "显示隐藏菜单栏项目" : "隐藏菜单栏项目"
+        return agentElements().first { $0.role == "AXButton" && $0.desc == wanted }?.frame
+    }
+
+    /// 溢出条是否处于展开态：出现「隐藏菜单栏项目」（收起按钮）即展开。
+    /// 没有任何隐藏项时系统不显示 chevron——没有展开/收起之分，视为已展开
+    private func isStripExpanded() -> Bool {
+        guard let mba = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.MenuBarAgent").first
+        else { return false }
+        let app = AXUIElementCreateApplication(mba.processIdentifier)
+        var windowsV: AnyObject?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsV) == .success,
+              let wins = windowsV as? [AXUIElement] else { return false }
+        var hasChevron = false
+        var expanded = false
+        for w in wins {
+            func walk(_ el: AXUIElement, _ depth: Int) {
+                guard depth <= 6, !expanded else { return }
+                var roleV: AnyObject?, descV: AnyObject?
+                AXUIElementCopyAttributeValue(el, kAXRoleAttribute as CFString, &roleV)
+                AXUIElementCopyAttributeValue(el, kAXDescriptionAttribute as CFString, &descV)
+                if roleV as? String == "AXButton", let d = descV as? String {
+                    if d == "显示隐藏菜单栏项目" { hasChevron = true; return }
+                    if d == "隐藏菜单栏项目" { hasChevron = true; expanded = true; return }
+                }
+                if depth > 0, roleV as? String == "AXApplication" { return }
+                var children: AnyObject?
+                AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &children)
+                for kid in children as? [AXUIElement] ?? [] { walk(kid, depth + 1) }
+            }
+            walk(w, 0)
+            if expanded { break }
+        }
+        return !hasChevron || expanded
+    }
+
+    /// 合成坐标点击（chevron 展开/收起专用；frame 由 chevronRect 现读现用）。
+    /// 先投 ESC 再点：误投的 up 可能点开某个状态项菜单（悬浮在菜单栏上），
+    /// 打开着的菜单会吞掉 chevron 点击——ESC 关掉它
+    private func click(_ p: CGPoint) {
+        onMainSync {
+            guard let src = CGEventSource(stateID: .hidSystemState) else { return }
+            if let escDown = CGEvent(keyboardEventSource: src, virtualKey: 53, keyDown: true) {
+                escDown.post(tap: .cghidEventTap)
+            }
+            usleep(60_000)
+            if let escUp = CGEvent(keyboardEventSource: src, virtualKey: 53, keyDown: false) {
+                escUp.post(tap: .cghidEventTap)
+            }
+            usleep(100_000)
+            let saved = CGEvent(source: nil)?.location
+            CGWarpMouseCursorPosition(p)
+            usleep(100_000)
+            CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: p, mouseButton: .left)?.post(tap: .cghidEventTap)
+            usleep(80_000)
+            CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: p, mouseButton: .left)?.post(tap: .cghidEventTap)
+            usleep(100_000)
+            if let saved { CGWarpMouseCursorPosition(saved) }
+        }
+    }
+
+    /// 合成 ⌘ 拖拽单个图标。**不做抓取校验**：实测拖拽进行中整个 AX 树纹丝不动
+    /// （按钮/module/extras 全部不变，只有松手落定后才重排），任何中途校验都是
+    /// 纯噪音——既误报（行情条宽度变化让整排按钮移位，看着像抓起来了）也漏报
+    /// （真正抓起来时反而看不到变化）。抓取是否成功只看事后归属/顺序校验 + 重试。
+    /// 源点 frame 由调用方现读现用，把"下按时源图标已移位"的概率压到最低。
+    /// 事件投递必须桥到主线程（队列线程投递会被窗口服务器静默丢弃——实测）
+    private func postDrag(from: CGPoint, to: CGPoint) {
+        onMainSync {
+            guard let src = CGEventSource(stateID: .hidSystemState) else { return }
+            let saved = CGEvent(source: nil)?.location
+            CGWarpMouseCursorPosition(from)
+            usleep(120_000)
+            func post(_ type: CGEventType, _ p: CGPoint, _ cmd: Bool) {
+                guard let e = CGEvent(mouseEventSource: src, mouseType: type,
+                                      mouseCursorPosition: p, mouseButton: .left) else { return }
+                e.flags = cmd ? .maskCommand : []
+                e.post(tap: .cghidEventTap)
+                usleep(20_000)
+            }
+            post(.leftMouseDown, from, true)
+            let steps = 10
+            for i in 1...steps {
+                let t = CGFloat(i) / CGFloat(steps)
+                let p = CGPoint(x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t)
+                CGWarpMouseCursorPosition(p)
+                post(.leftMouseDragged, p, true)
+            }
+            usleep(120_000)
+            post(.leftMouseUp, to, false)
+            usleep(150_000)
+            if let saved { CGWarpMouseCursorPosition(saved) }
+        }
+    }
+
+    /// 展开溢出条（需要时）。没有 chevron（无隐藏项）视为无需展开。
+    /// 每次点击前先投一个 ESC：误投的 up 可能点开某个状态项菜单（悬浮在菜单栏上），
+    /// 打开着的菜单会吞掉后续 chevron 点击——ESC 关掉它再点
+    private func expandStrip() -> Bool {
+        if isStripExpanded() { return true }
+        for attempt in 0..<3 {
+            guard let ch = chevronRect(true) else {
+                ErrorLog.log("图标管理: 展开点击 #\(attempt + 1)：找不到展开按钮，视为无需展开")
+                return true
+            }
+            click(CGPoint(x: ch.midX, y: ch.midY))
+            Thread.sleep(forTimeInterval: 1.5)
+            let exp = isStripExpanded()
+            ErrorLog.log("图标管理: 展开点击 #\(attempt + 1) chevron=(\(Int(ch.minX)),\(Int(ch.minY)),\(Int(ch.width))×\(Int(ch.height))) → 展开=\(exp)")
+            if exp { return true }
+        }
+        return false
+    }
+
+    /// 展开态下读全部实时 frame：第三方走各 App 的 AXExtrasMenuBar（带身份、展开态下
+    /// 返回展开条里的真实槽位），模块/Bento 走实时窗口
+    private func liveFrames(items: [LiveItem]) -> [String: CGRect] {
+        var out: [String: CGRect] = [:]
+        for el in agentElements() {
+            if el.role == "AXMenuBarItem", let name = Self.moduleKeyMap[el.ident] {
+                out["module:\(name)"] = el.frame
+            }
+            if el.role == "AXButton", el.desc == "Bento" {
+                out["bento:main"] = el.frame
+            }
+        }
+        for item in items where !item.key.hasPrefix("module:") && item.key != "bento:main" {
+            guard let pid = pidByKey[item.key] else { continue }
+            let idx = (Int(item.key.split(separator: "|").last ?? "1") ?? 1) - 1
+            let extras = extras(of: pid)
+            if extras.indices.contains(idx), let f = extras[idx].frame { out[item.key] = f }
+        }
+        return out
+    }
+
+    /// 单键实时 frame（每次拖拽前现读——行情图标宽度每轮都在变，展开条会不断重排）
+    private func liveFrame(ofKey key: String) -> CGRect? {
+        if key == "bento:main" {
+            return agentElements().first { $0.role == "AXButton" && $0.desc == "Bento" }?.frame
+        }
+        if key.hasPrefix("module:") {
+            let name = String(key.dropFirst("module:".count))
+            guard let ident = Self.moduleKeyMap.first(where: { $0.value == name })?.key else { return nil }
+            return agentElements().first { $0.role == "AXMenuBarItem" &&
+                ($0.ident == ident || $0.ident.hasPrefix(ident + "-")) }?.frame
+        }
+        guard let pid = pidByKey[key] else { return nil }
+        let idx = (Int(key.split(separator: "|").last ?? "1") ?? 1) - 1
+        let extras = extras(of: pid)
+        return extras.indices.contains(idx) ? extras[idx].frame : nil
+    }
+
+    private func markDragFailure(_ key: String) {
+        let n = (dragFailCounts[key] ?? 0) + 1
+        dragFailCounts[key] = n
+        if n >= 3, dragGiveUp.insert(key).inserted {
+            ErrorLog.log("图标管理: \(key) 连续 3 次拖拽失败，暂停纠偏（可能不可拖拽，改观测）；下次 UI 操作会重试")
+        }
+    }
+
+    /// 拖拽纠偏 session：展开 → 先修归属（该隐没隐 / 该显未显）→ 收起 → 事后校验；
+    /// 顺序纠偏只在用户操作的轮次（enforceOrder）做——漂移轮的顺序下一轮会自动从
+    /// 真实菜单栏采纳（顺序的事实来源是真实栏，强行在漂移轮旋转反而制造沉底乒乓）。
+    /// 在 enforcer 的串行队列上同步执行（数秒），correctionInProgress 防重入。
+    /// 归属判定用传入的收起态 frame（byKey[].frame + chevronFrame），展开态只用来取源/落点坐标
+    private func runDragCorrection(visibleList: [String], hiddenList: [String],
+                                   byKey: [String: LiveItem], chevronFrame: CGRect?,
+                                   enforceOrder: Bool) {
+        guard !correctionInProgress, !statusMenuOpen else { return }
+        correctionInProgress = true
+        defer { correctionInProgress = false }
+
+        let mainWidth = CGDisplayBounds(CGMainDisplayID()).width
+        func onBar(_ f: CGRect?) -> Bool { onBarCollapsed(f, chevron: chevronFrame, mainWidth: mainWidth) }
+        // 该显未显（沉底/无 frame）与该隐未隐（在栏）——归属判定只用收起态 frame；
+        // 拥挤被接受的键（acceptedSunk）不再纠偏
+        let toShow = visibleList.filter { $0 != "bento:main" && !acceptedSunk.contains($0) && !onBar(byKey[$0]?.frame) }
+        let toHide = hiddenList.filter { onBar(byKey[$0]?.frame) }
+
+        var dragCount = 0
+        let maxDrags = 14
+        func drag(_ key: String, to target: CGPoint) -> Bool {
+            guard dragCount < maxDrags, !dragGiveUp.contains(key) else { return false }
+            guard let f = liveFrame(ofKey: key) else {
+                ErrorLog.log("图标管理: \(key) 读不到实时 frame，跳过拖拽")
+                markDragFailure(key)
+                return false
+            }
+            ErrorLog.log("图标管理: 拖拽 \(key) (\(Int(f.midX)),\(Int(f.midY))) → (\(Int(target.x)),\(Int(target.y)))")
+            postDrag(from: CGPoint(x: f.midX, y: f.midY), to: target)
+            dragCount += 1
+            Thread.sleep(forTimeInterval: 2.0) // 等 agent 落位 + AX 刷新（1s 实测不够，AX 给旧 frame）
+            // 落定校验：源 frame 应该已经变了。没变 = 抓错了对象（源坐标读到的是上一轮
+            // 的旧位置）或落点被弹回——再往下拖只会继续抓错，本轮止损
+            if let after = liveFrame(ofKey: key), abs(after.midX - f.midX) < 4 {
+                ErrorLog.log("图标管理: \(key) 拖后 frame 未变（抓错对象或落点被弹回），本轮止损")
+                return false
+            }
+            return true
+        }
+
+        let items = Array(byKey.values)
+        var frames = liveFrames(items: items)
+
+        // 1) 归属纠偏（需要展开条）：先展开（用户自己展开的保持原状）
+        var startedExpanded = false
+        if !toHide.isEmpty || !toShow.isEmpty {
+            startedExpanded = isStripExpanded()
+            if !startedExpanded, !expandStrip() {
+                ErrorLog.log("图标管理: 拖拽纠偏中止（溢出条无法展开）")
+                return
+            }
+            frames = liveFrames(items: items)
+            guard frames.values.contains(where: { $0.width > 0 }) else {
+                ErrorLog.log("图标管理: 拖拽纠偏中止（展开态读不到任何 frame，可能显示器休眠）")
+                if !startedExpanded, let ch = chevronRect(false) { click(CGPoint(x: ch.midX, y: ch.midY)) }
+                return
+            }
+            // 隐藏：投进展开条区域（实测：落进展开条 = 进溢出集；还没有隐藏项时投到最左）
+            for key in toHide {
+                let stripFrames = hiddenList.compactMap { frames[$0] }
+                let target: CGPoint
+                if let leftmost = stripFrames.min(by: { $0.minX < $1.minX }) {
+                    target = CGPoint(x: leftmost.midX, y: leftmost.midY)
+                } else {
+                    target = CGPoint(x: 200, y: 16)
+                }
+                if drag(key, to: target) { ErrorLog.log("图标管理: 拖拽隐藏 \(key)") }
+                frames = liveFrames(items: items)
+            }
+            // 显示：投到最右可见槽位右侧。实测右端落点即"回到可见区最右"（wifi 实证），
+            // 缝隙不够时 agent 会把整条链向左平移让位——栏不满时谁也不会沉底；
+            // 真满时最左项沉底 = 拥挤语义本身，下一轮退避接管，不做旋转预防
+            for key in toShow {
+                var rightEdge: CGFloat = 0
+                for (k, f) in frames where visibleList.contains(k) && k != key {
+                    if f.maxX > rightEdge { rightEdge = f.maxX }
+                }
+                let target = CGPoint(x: rightEdge > 0 ? min(rightEdge + 8, mainWidth - 60) : 1270, y: 16)
+                if drag(key, to: target) { ErrorLog.log("图标管理: 拖拽显示 \(key)") }
+                frames = liveFrames(items: items)
+            }
+            // 收起（只在本次 session 自己展开的情况下）
+            if !startedExpanded {
+                if let ch = chevronRect(false) {
+                    click(CGPoint(x: ch.midX, y: ch.midY))
+                    Thread.sleep(forTimeInterval: 1.5)
+                }
+            }
+            // 收起后 agent 的全量重排需要几秒（AX 树会先给出过渡态/鬼影），
+            // 立即校验会把刚成功的操作误判成失败——等它落定
+            Thread.sleep(forTimeInterval: 3.5)
+        }
+
+        // 2) 顺序纠偏（只在用户操作的轮次做，且只在收起态做）：展开态下可见项的真实槽位
+        //    可能落在展开条区域（行情条 200pt 的展开槽位就在那里），展开态 x 序 ≠ 收起态
+        //    x 序。漂移轮不强制顺序——顺序的事实来源是真实菜单栏，下一轮采纳会同步
+        var orderAttempts = 0
+        if enforceOrder {
+            while orderAttempts < 6, dragCount < maxDrags {
+                frames = liveFrames(items: items)
+                let candidates = visibleList.filter { onBar(frames[$0]) && !dragGiveUp.contains($0) }
+                let current = candidates.sorted { frames[$0]!.minX < frames[$1]!.minX }
+                if current == candidates { break }
+                var fixedOne = false
+                for (i, key) in candidates.enumerated() where current[i] != key {
+                    guard let targetF = frames[current[i]] else { continue }
+                    if drag(key, to: CGPoint(x: targetF.midX, y: targetF.midY)) {
+                        ErrorLog.log("图标管理: 拖拽排序 \(key) → 第 \(i + 1) 位")
+                    }
+                    fixedOne = true
+                    break
+                }
+                if !fixedOne { break }
+                orderAttempts += 1
+            }
+        }
+        // 事后校验（收起态）：轻量重读，报告残留（供日志；下一轮退避逻辑接管）
+        var residual: [String] = []
+        for key in toShow {
+            if let f = liveFrame(ofKey: key), !onBar(f) { residual.append("\(key) 仍未显示") }
+        }
+        for key in toHide {
+            if let f = liveFrame(ofKey: key), onBar(f) { residual.append("\(key) 仍未隐藏") }
+        }
+        // 校验不通过的键计入失败次数：真拖不动的项（系统区钉住的那些）连续 3 轮后暂停纠偏
+        for key in toShow {
+            if let f = liveFrame(ofKey: key), !onBar(f) { markDragFailure(key) }
+        }
+        for key in toHide {
+            if let f = liveFrame(ofKey: key), onBar(f) { markDragFailure(key) }
+        }
+        ErrorLog.log("图标管理: 拖拽纠偏完成（\(dragCount) 次拖拽\(residual.isEmpty ? "" : "，残留：\(residual.joined(separator: "、"))")）")
+    }
+
 
     /// 溢出区展开态的 chevron（»，desc = "Double forward chevron"）存在时，点它一下收起。
     /// 这是本模块仅剩的合成事件：单次点击、目标是系统自己的收起按钮，无拖拽风险。
@@ -549,13 +1220,8 @@ class MenuBarIconManager: NSObject {
             ErrorLog.log("图标管理: chevron frame 异常 \(chevron)，放弃收起点击")
             return
         }
-        let saved = CGEvent(source: nil)?.location
-        let p = CGPoint(x: chevron.midX, y: chevron.midY)
-        let src = CGEventSource(stateID: .hidSystemState)
-        CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: p, mouseButton: .left)?.post(tap: .cghidEventTap)
-        usleep(60_000)
-        CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: p, mouseButton: .left)?.post(tap: .cghidEventTap)
-        if let saved { CGWarpMouseCursorPosition(saved) }
+        // 合成点击必须走主线程桥（队列线程投递会被窗口服务器丢弃，见 onMainSync）
+        click(CGPoint(x: chevron.midX, y: chevron.midY))
         ErrorLog.log("图标管理: 已点击收起展开的溢出区")
     }
 
@@ -600,31 +1266,69 @@ class MenuBarIconManager: NSObject {
     /// hiddenKeys 保留——下次启动会重新隐藏，语义不变。
     /// 不放 applicationWillTerminate：重启/关机也会走那里，每次都制造 agent 重写扰动。
     func prepareForQuit() {
+        guard Self.featureEnabled else { return }
         // 有界等待而非 queue.sync：queue 可能正卡在对无响应 App 的 AX 往返上，
-        // 退出不该无限转菊花。超时就放弃写回（图标留在溢出区，代价可接受）
+        // 退出不该无限转菊花。拖拽模式逐个拖出最慢（≈1s/项），预算放宽到 12s。
+        // 等待用 RunLoop 轮转而不是干等：拖拽纠偏的内部 onMainSync 桥需要主队列
+        // 持续排水，主线程 park 在 semaphore 上会互相锁死
         let done = DispatchSemaphore(value: 0)
         queue.async { [self] in
             writeBackHiddenEntries()
             done.signal()
         }
-        if done.wait(timeout: .now() + 3) == .timedOut {
-            ErrorLog.log("图标管理: 退出写回等待超时，放弃")
+        let deadline = Date().addingTimeInterval(12)
+        while Date() < deadline {
+            if done.wait(timeout: .now() + 0.05) == .success { return }
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
         }
+        ErrorLog.log("图标管理: 退出写回等待超时，放弃")
     }
 
     private func writeBackHiddenEntries() {
         guard !hiddenKeys.isEmpty else { return }
-        var raw = readRawPositions()
-        var moved = 0
-        for (i, key) in hiddenKeys.enumerated() {
-            for entryKey in lastEntryKeys[key] ?? [] where raw[entryKey] != nil {
-                raw[entryKey] = 500.0 + Double(i) * 8 // 可见区左端，一次性值，重启会重排
-                moved += 1
+        if lever == .dict {
+            var raw = readRawPositions()
+            var moved = 0
+            for (i, key) in hiddenKeys.enumerated() {
+                for entryKey in lastEntryKeys[key] ?? [] where raw[entryKey] != nil {
+                    raw[entryKey] = 500.0 + Double(i) * 8 // 可见区左端，一次性值，重启会重排
+                    moved += 1
+                }
             }
+            guard moved > 0 else { return }
+            writeRawPositions(raw)
+            ErrorLog.log("图标管理: 退出前已把 \(moved) 个隐藏条目写回可见区")
+            return
         }
-        guard moved > 0 else { return }
-        writeRawPositions(raw)
-        ErrorLog.log("图标管理: 退出前已把 \(moved) 个隐藏条目写回可见区")
+        // 拖拽模式：展开一次，把隐藏项逐个拖回右端可见区（尽力而为）。
+        // 与 26 时代 hider 销毁自动恢复不同：27 的溢出集持久在 agent 内部，退出后
+        // 不会自动回来，只有主动拖出能兜住「卸载后图标沉底」的场景
+        guard !statusMenuOpen, !correctionInProgress, expandStrip() else {
+            ErrorLog.log("图标管理: 退出恢复中止（溢出条无法展开）")
+            return
+        }
+        let runningApps = NSWorkspace.shared.runningApplications
+        let positions = readRawPositions().compactMapValues { ($0 as? NSNumber)?.doubleValue }
+        guard let mba = runningApps.first(where: { $0.bundleIdentifier == "com.apple.MenuBarAgent" }) else { return }
+        let (thirdParty, _) = enumerateItems(positions: positions, runningApps: runningApps, fullProbe: true)
+        var items = thirdParty
+        items += enumerateModules(positions: positions, mbaApp: mba).items
+        var frames = liveFrames(items: items)
+        let mainWidth = CGDisplayBounds(CGMainDisplayID()).width
+        var restored = 0
+        let deadline = Date().addingTimeInterval(9) // 预算：退出等太久体验差，超时放弃剩余
+        for key in hiddenKeys where Date() < deadline {
+            guard let f = frames[key] ?? liveFrame(ofKey: key) else { continue }
+            var rightEdge: CGFloat = 0
+            for (k, v) in frames where !hiddenKeys.contains(k) && v.maxX > rightEdge { rightEdge = v.maxX }
+            let target = CGPoint(x: rightEdge > 0 ? min(rightEdge + 8, mainWidth - 60) : 1270, y: 16)
+            postDrag(from: CGPoint(x: f.midX, y: f.midY), to: target)
+            restored += 1
+            Thread.sleep(forTimeInterval: 0.6)
+            frames = liveFrames(items: items)
+        }
+        if let ch = chevronRect(false) { click(CGPoint(x: ch.midX, y: ch.midY)) }
+        ErrorLog.log("图标管理: 退出前恢复显示 \(restored)/\(hiddenKeys.count) 个隐藏项（拖拽模式）")
     }
 
     // MARK: 对外操作（主线程）
@@ -639,6 +1343,10 @@ class MenuBarIconManager: NSObject {
                 self.hiddenKeys.remove(key)
             }
             self.suppressAdoptionOnce = true
+            self.forceRewriteOnce = true
+            self.dragGiveUp.removeAll() // 用户明确操作 = 重试之前放弃的键
+            self.dragFailCounts.removeAll()
+            self.acceptedSunk.removeAll()
             self.enforce(force: true)
         }
     }
@@ -855,6 +1563,10 @@ class MenuBarIconManager: NSObject {
         queue.async {
             self.hiddenKeys.removeAll()
             self.suppressAdoptionOnce = true
+            self.forceRewriteOnce = true
+            self.dragGiveUp.removeAll()
+            self.dragFailCounts.removeAll()
+            self.acceptedSunk.removeAll()
             self.enforce(force: true)
         }
     }
@@ -958,6 +1670,10 @@ extension MenuBarIconManager: NSTableViewDataSource, NSTableViewDelegate {
             for k in self.iconOrder where !newOrder.contains(k) { newOrder.append(k) }
             self.iconOrder = newOrder
             self.suppressAdoptionOnce = true
+            self.forceRewriteOnce = true
+            self.dragGiveUp.removeAll()
+            self.dragFailCounts.removeAll()
+            self.acceptedSunk.removeAll()
             self.enforce(force: true)
         }
         return true

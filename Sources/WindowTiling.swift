@@ -291,8 +291,8 @@ struct OnScreenWindowInfo {
 /// 对其它 App 窗口的 AX 读写集中在这里
 class WindowManager {
     private let myPid = ProcessInfo.processInfo.processIdentifier
-    // 短 TTL 缓存：⌘ 点击很常见，每次都全量 CGWindowList 枚举太浪费；
-    // 80ms 内的连续调用（含 ⌘ 双击路径的两次背靠背查询）复用同一份快照
+    // 短 TTL 缓存：标题栏点击很常见，每次都全量 CGWindowList 枚举太浪费；
+    // 80ms 内的连续调用（含 Shift 双击路径的两次背靠背查询）复用同一份快照
     private var windowsCache: [OnScreenWindowInfo] = []
     private var windowsCacheAt = Date.distantPast
 
@@ -333,6 +333,19 @@ class WindowManager {
                   cgPoint.y >= w.bounds.minY, cgPoint.y <= w.bounds.minY + bandHeight
             else { continue }
             return TitlebarHit(pid: w.pid, windowID: w.id, bounds: w.bounds) // front-to-back 首个命中即最上层
+        }
+        return nil
+    }
+
+    /// 点是否落在窗口边缘 ~12pt 缩放带内（顶部边缘除外——那里属于标题栏移动带）。
+    /// 滚动条的拖拽也发生在这条带里，调用方需要用 AX 尺寸比对来区分真实缩放
+    func resizeEdgeHit(at cgPoint: CGPoint) -> TitlebarHit? {
+        for w in onScreenWindows() {
+            guard w.bounds.width >= 50, w.bounds.height >= 50 else { continue }
+            guard w.bounds.contains(cgPoint) else { continue }
+            guard !w.bounds.insetBy(dx: 12, dy: 12).contains(cgPoint) else { continue }
+            guard cgPoint.y > w.bounds.minY + 12 else { continue } // 顶部交给标题栏移动带
+            return TitlebarHit(pid: w.pid, windowID: w.id, bounds: w.bounds)
         }
         return nil
     }
@@ -441,8 +454,9 @@ class WindowManager {
     /// Terminal）会把位置夹回屏内（x 被夹成 0），尺寸随后缩小也补不回来。
     /// 先缩到目标尺寸再移动即可绕开这个钳制，末尾再写一次尺寸兜住
     /// 移动过程中 App 自己的重排。
-    /// 设置后读回实际值：部分 App 会按自身约束（最小尺寸、字符步进）修正，
-    /// 误差大就整轮再来一次，最多 2 轮收敛。返回读回的实际 frame。
+    /// 部分 App（实测）会**异步**应用 frame：同步读回是中间态（尺寸变了、位置还停在
+    /// 旧坐标），要隔一小段时间再读才是真实结果——所以每轮写入后都等 60ms 再读回，
+    /// 最多 3 轮；尺寸已到位但位置被回退的，最后单独补一次位置写。返回读回的实际 frame。
     @discardableResult
     func setFrame(_ window: AXUIElement, to rect: CGRect) -> CGRect? {
         var pos = rect.origin
@@ -450,15 +464,34 @@ class WindowManager {
         guard let posValue = AXValueCreate(.cgPoint, &pos),
               let sizeValue = AXValueCreate(.cgSize, &size)
         else { return frame(of: window) }
-        for _ in 0..<2 {
+        var lastRead: CGRect?
+        for _ in 0..<3 {
             AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeValue)
             AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, posValue)
             AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeValue)
-            if let actual = frame(of: window), actual.approxEquals(rect, tolerance: 3) {
+            Thread.sleep(forTimeInterval: 0.06) // 等异步应用，别读中间态
+            lastRead = frame(of: window)
+            // 容差 4：App 的像素取整（如 855 vs 851.24）不值得再来一轮写入——
+            // 多轮写入会让窗口肉眼可见地"再来一下"
+            if let actual = lastRead, actual.approxEquals(rect, tolerance: 4) {
                 return actual
             }
         }
-        return frame(of: window)
+        // 收敛失败（部分 App 只应用了一半写入）：缺哪个轴补哪个轴，各补一次再读回
+        if let last = lastRead {
+            let posOff = abs(last.minX - rect.minX) > 4 || abs(last.minY - rect.minY) > 4
+            let sizeOff = abs(last.width - rect.width) > 4 || abs(last.height - rect.height) > 4
+            if posOff {
+                AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, posValue)
+                Thread.sleep(forTimeInterval: 0.12)
+            }
+            if sizeOff {
+                AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeValue)
+                Thread.sleep(forTimeInterval: 0.12)
+            }
+            if posOff || sizeOff { lastRead = frame(of: window) }
+        }
+        return lastRead ?? frame(of: window)
     }
 }
 
@@ -841,7 +874,14 @@ class LayoutEditorSession: NSObject {
     @objc func cancelEditing() { end(save: false) }
 }
 
-// MARK: 分屏：控制器（event tap、双击/拖动状态机、吸附与还原）
+// MARK: 分屏：控制器（event tap、双击/Shift 双击/Shift 拖动/甩动手势状态机、吸附/还原/最大化）
+
+// 手势一览（全部经由标题栏，红绿灯区与无权限时放行）：
+// - 双击标题栏        = 吸进光标所在格子（窗口已在格子里 → 还原到吸附前）
+// - Shift + 双击标题栏 = 铺满当前屏幕（永远最大化，不还原）
+// - Shift + 拖标题栏   = 网格浮层高亮吸附
+// - 甩标题栏（1.2s 内来回 ≥2 折返、行程 ≥60pt）= 铺满当前屏幕
+// - 普通拖 / 边缘缩放  = 取消吸附状态（下一个双击重新吸附）
 
 private struct SnapRecord {
     var original: CGRect // 吸附前位置（CG 坐标）
@@ -898,6 +938,29 @@ class TilingController: NSObject {
     private var axNegativeCache: [String: Date] = [:]
     /// 还原记忆：windowID → (原始 frame, 吸附后实际 frame)
     private var snapMemory: [CGWindowID: SnapRecord] = [:]
+    /// 手动拖动/缩放候选：无修饰键的按下后若发生明显移动 = 用户改了窗口几何，
+    /// 抬起时取消该窗口的吸附记忆（移动/缩放本身就取消了"最大化"状态）
+    private struct PlainDragCandidate {
+        var down: CGPoint
+        var pid: pid_t
+        var windowID: CGWindowID
+        var resizeZone: Bool // 按下落在窗口边缘缩放带（滚动条也在这里，抬起时需 AX 尺寸比对区分）
+        var moved = false
+    }
+    private var plainDrag: PlainDragCandidate?
+    /// 甩动最大化跟踪：无修饰键标题栏拖拽的轨迹（折返次数 + 行程），用于"甩一甩 = 铺满屏幕"
+    private final class WiggleTracker {
+        var downAt: Date
+        var points: [(p: CGPoint, t: Date)] = []
+        var lastDirUnit = CGVector.zero
+        var reversals = 0
+        var travel: CGFloat = 0
+        init(downAt: Date) { self.downAt = downAt }
+    }
+    private var wiggle: WiggleTracker?
+    /// 自跟踪双击兜底：上一次 clickState=1 的按下（时间+位置+是否带 Shift）。
+    /// 系统偶尔把双击的两次按下都报成 clickState=1，此时只能自己按时间窗+同点距离判定
+    private var lastSingleDown: (point: CGPoint, time: Date, mod: Bool)?
     /// 修饰键拖动会话
     private var drag: DragSnapSession?
     private var overlays: [String: GridOverlayWindow] = [:] // key = 显示器 UUID
@@ -943,7 +1006,7 @@ class TilingController: NSObject {
 
     private func installTap() {
         removeTap()
-        // 不订阅 mouseMoved：⌘ 拖拽期间系统发的是 leftMouseDragged，
+        // 不订阅 mouseMoved：Shift 拖拽期间系统发的是 leftMouseDragged，
         // 订阅 mouseMoved 只会让每次鼠标移动都空跑一趟回调（稳态纯浪费）
         let mask: CGEventMask = (1 << CGEventType.leftMouseDown.rawValue)
             | (1 << CGEventType.leftMouseUp.rawValue)
@@ -1026,6 +1089,9 @@ class TilingController: NSObject {
         streakAnchor = nil
         pendingSwallowUp = false
         drag = nil
+        plainDrag = nil
+        wiggle = nil
+        lastSingleDown = nil
         axNegativeCache.removeAll()
         hideOverlays()
     }
@@ -1098,24 +1164,65 @@ class TilingController: NSObject {
             pendingSwallowUp = false
         }
 
-        // 修饰键 + 标题栏按下 → 开始拖动吸附会话（事件不吞，窗口正常跟随系统拖动）
-        if modifierMatches(event) {
+        // 修饰键 + 标题栏按下 → 开始拖动吸附会话（事件不吞，窗口正常跟随系统拖动）。
+        // clickState≥2 的按下是双击的第二击，不启动拖动会话（否则 Shift 双击会闪网格浮层）
+        if modifierMatches(event), clickState < 2 {
             beginDragIfOnTitlebar(at: point)
         }
 
-        guard clickState >= 2 else {
-            return Unmanaged.passUnretained(event)
+        // 手动拖动/缩放跟踪（无修饰键、单击按下）：候选窗口只做几何判断，零 AX 成本。
+        // 双击吸附的第二击不设候选——它后面不会跟拖动
+        let singleHit: TitlebarHit?
+        if clickState <= 1, !modifierMatches(event) {
+            singleHit = windowMgr.titlebarHit(at: point, bandHeight: TilingController.titleBarBandHeight)
+            if let hit = singleHit {
+                plainDrag = PlainDragCandidate(down: point, pid: hit.pid, windowID: hit.windowID,
+                                               resizeZone: false)
+                // 甩动跟踪：标题栏按下即开始记录轨迹
+                wiggle = WiggleTracker(downAt: Date())
+            } else if let edge = windowMgr.resizeEdgeHit(at: point) {
+                // 窗口边缘缩放带按下（滚动条的拖拽也落在这条带里，抬起时用 AX 尺寸比对区分）
+                plainDrag = PlainDragCandidate(down: point, pid: edge.pid, windowID: edge.windowID,
+                                               resizeZone: true)
+            } else {
+                plainDrag = nil
+            }
+        } else {
+            singleHit = nil
         }
 
-        // 已吞过一次双击：仍在系统双击时间窗内且位置未变的第 3 次及后续按下继续吞
-        //（系统可能把第 1、3 次配对成另一次双击），但不再重复触发吸附
-        if let anchor = streakAnchor,
-           Date().timeIntervalSince(anchor.time) <= NSEvent.doubleClickInterval,
-           abs(point.x - anchor.point.x) <= 4, abs(point.y - anchor.point.y) <= 4 {
-            swallowClick(at: point)
-            return nil
+        if clickState >= 2 {
+            // 已吞过一次双击：仍在系统双击时间窗内且位置未变的第 3 次及后续按下继续吞
+            //（系统可能把第 1、3 次配对成另一次双击），但不再重复触发吸附
+            if let anchor = streakAnchor,
+               Date().timeIntervalSince(anchor.time) <= NSEvent.doubleClickInterval,
+               abs(point.x - anchor.point.x) <= 4, abs(point.y - anchor.point.y) <= 4 {
+                swallowClick(at: point)
+                return nil
+            }
+            lastSingleDown = nil // 系统已把这次配对成双击，自跟踪候选作废
+            // Shift + 双击 = 铺满屏幕；普通双击 = 吸进光标所在格子
+            return performDoubleClickAction(event, at: point, maximize: modifierMatches(event))
         }
+        // clickState 失灵兜底：实测系统偶尔把双击的两次按下都报成 clickState=1，
+        // 这类"该执行却没执行"在日志里完全无痕。自己用时间窗 + 同点距离判定第二次按下
+        if let last = lastSingleDown,
+           last.mod == modifierMatches(event),
+           Date().timeIntervalSince(last.time) <= NSEvent.doubleClickInterval,
+           abs(point.x - last.point.x) <= 4, abs(point.y - last.point.y) <= 4 {
+            lastSingleDown = nil
+            dlog("自跟踪双击（clickState 未递增）point=\(point)")
+            return performDoubleClickAction(event, at: point, maximize: modifierMatches(event))
+        }
+        lastSingleDown = (point, Date(), modifierMatches(event))
+        if debugEnabled, singleHit != nil { dlog("单击按下（自跟踪候选）point=\(point)") }
+        return Unmanaged.passUnretained(event)
+    }
 
+    /// 双击动作的完整流程（负缓存 → 几何预过滤 → AX 命中 → 异步执行 → 吞击）。
+    /// maximize = Shift 双击（铺满屏幕）；否则普通双击（吸进光标所在格子）。
+    /// 系统 clickState 路径与自跟踪兜底共用同一段逻辑
+    private func performDoubleClickAction(_ event: CGEvent, at point: CGPoint, maximize: Bool) -> Unmanaged<CGEvent>? {
         // AX 负缓存：刚失败/无响应的目标在短时间内直接放行
         guard !isAxNegativeCached(point) else {
             dlog("放行：AX 负缓存命中")
@@ -1160,11 +1267,16 @@ class TilingController: NSObject {
         }
         dlog("准备吸附 frame=\(frame)")
 
-        // 写 frame 要多次 AX 往返（尺寸→位置→尺寸，最多两轮），在 tap 回调里同步做
-        // 有回调超时被系统摘掉 tap 的风险；回调只管吞掉这次点击，吸附放到下一个主队列
-        // tick（tap 回调本来就跑在主 runloop 上，先后顺序不变）
+        // 写 frame 要多次 AX 往返，在 tap 回调里同步做有回调超时被系统摘掉 tap 的风险；
+        // 回调只管吞掉这次点击，动作放到下一个主队列 tick（tap 回调本来就跑在主 runloop 上）
         DispatchQueue.main.async { [weak self] in
-            self?.toggleSnap(window: window, id: hit.windowID, current: frame, clickPointCG: point)
+            guard let self else { return }
+            if maximize {
+                // Shift 双击：窗口与 frame 已解析，直接复用，少一轮 AX 往返
+                self.maximizeToScreen(window: window, current: frame, tag: "Shift双击最大化")
+            } else {
+                self.toggleSnap(window: window, id: hit.windowID, current: frame, clickPointCG: point)
+            }
         }
         swallowClick(at: point)
         return nil // 吞掉这次按下，阻止系统默认的缩放/最小化
@@ -1172,6 +1284,36 @@ class TilingController: NSObject {
 
     private func handleMouseUp(_ event: CGEvent) -> Unmanaged<CGEvent>? {
         if drag != nil { finishDrag() }
+        // 手动拖动结束：拖过的窗口取消吸附记忆——用户拖动就代表"最大化状态已取消"，
+        // 下次双击应重新吸附，而不是还原到拖动前的位置
+        if let plain = plainDrag, plain.moved {
+            lastSingleDown = nil // 这次手势消费了按下，别让它跟后续点击配成双击
+            layoutStamp = Date() // 手动改动窗口几何：作废所有在途布局追踪，别把窗口拽回去
+            // 甩动判定优先：标题栏来回甩 = 铺满屏幕（永远最大化，不做还原切换）
+            if !plain.resizeZone, let w = wiggle, w.reversals >= 2, w.travel >= 60 {
+                dlog("甩动手势触发 id=\(plain.windowID) 折返=\(w.reversals) 行程=\(Int(w.travel))")
+                snapMemory.removeValue(forKey: plain.windowID) // 窗口被甩动了，格子吸附状态作废
+                let pid = plain.pid, wid = plain.windowID
+                DispatchQueue.main.async { [weak self] in
+                    self?.wiggleMaximize(pid: pid, windowID: wid)
+                }
+            } else if plain.resizeZone {
+                // 缩放带手势：滚动条的拖拽也在边缘带里——AX 确认尺寸真的变了才失效
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, let rec = self.snapMemory[plain.windowID] else { return }
+                    guard let window = self.windowMgr.axWindow(pid: plain.pid, windowID: plain.windowID, bounds: .zero),
+                          let f = self.windowMgr.frame(of: window) else { return }
+                    if abs(f.width - rec.snapped.width) > 3 || abs(f.height - rec.snapped.height) > 3,
+                       self.snapMemory.removeValue(forKey: plain.windowID) != nil {
+                        self.dlog("手动缩放取消吸附状态 id=\(plain.windowID)")
+                    }
+                }
+            } else if snapMemory.removeValue(forKey: plain.windowID) != nil {
+                dlog("手动拖动取消吸附状态 id=\(plain.windowID)")
+            }
+        }
+        wiggle = nil
+        plainDrag = nil
         if pendingSwallowUp {
             // 吞掉与被吞按下配对的抬起（新的真实按下会先清标志，不会错吞正常抬起）
             pendingSwallowUp = false
@@ -1181,10 +1323,39 @@ class TilingController: NSObject {
     }
 
     private func handleMouseMoved(_ event: CGEvent) -> Unmanaged<CGEvent>? {
-        guard drag != nil else { return Unmanaged.passUnretained(event) }
-        drag?.didMove = true
-        updateDragHighlight(at: event.location)
+        if drag != nil {
+            if !(drag!.didMove) { showOverlays() } // 第一次实际拖动才弹网格（Shift 双击不闪浮层）
+            drag?.didMove = true
+            updateDragHighlight(at: event.location)
+        }
+        // 手动拖动候选 + 明显移动 = 用户在拖窗口（移动超过 6pt 才算拖动，滤掉微抖）
+        if plainDrag != nil, !modifierMatches(event) {
+            let dx = event.location.x - plainDrag!.down.x
+            let dy = event.location.y - plainDrag!.down.y
+            if dx * dx + dy * dy > 36 { plainDrag?.moved = true }
+            if plainDrag?.resizeZone == false { updateWiggle(at: event.location) }
+        }
         return Unmanaged.passUnretained(event)
+    }
+
+    /// 甩动轨迹跟踪：相邻段方向夹角 ≥120° 记一次折返；段长 ≥12pt 才算段（滤微抖）；
+    /// 超过 1.2s 的轨迹点作废（甩动要快，慢拖不算）
+    private func updateWiggle(at p: CGPoint) {
+        guard let w = wiggle else { return }
+        let now = Date()
+        w.points.removeAll { now.timeIntervalSince($0.t) > 1.2 }
+        if let last = w.points.last {
+            let seg = hypot(p.x - last.p.x, p.y - last.p.y)
+            guard seg >= 12 else { return }
+            w.travel += seg
+            let u = CGVector(dx: (p.x - last.p.x) / seg, dy: (p.y - last.p.y) / seg)
+            if w.lastDirUnit != .zero {
+                let cosAngle = u.dx * w.lastDirUnit.dx + u.dy * w.lastDirUnit.dy
+                if cosAngle < -0.5 { w.reversals += 1 } // 夹角 ≥ 120°
+            }
+            w.lastDirUnit = u
+        }
+        w.points.append((p, now))
     }
 
     private func swallowClick(at point: CGPoint) {
@@ -1193,7 +1364,7 @@ class TilingController: NSObject {
     }
 
     private func modifierMatches(_ event: CGEvent) -> Bool {
-        event.flags.contains(.maskCommand) // 拖动吸附固定用 ⌘
+        event.flags.contains(.maskShift) // 拖动吸附固定用 Shift（Shift+双击=铺满屏幕）
     }
 
     private func ensurePermission() -> Bool {
@@ -1221,30 +1392,45 @@ class TilingController: NSObject {
     }
 
     private func cacheAxNegative(_ p: CGPoint) {
-        axNegativeCache[negCacheKey(p)] = Date().addingTimeInterval(0.75)
+        // 0.4s：只覆盖用户连击的间隙。TTL 太长会把紧跟着的第二次双击也放行掉，
+        // 表现为"该执行的时候完全没有执行"
+        axNegativeCache[negCacheKey(p)] = Date().addingTimeInterval(0.4)
         if axNegativeCache.count > 64 { axNegativeCache.removeAll() } // 防膨胀
     }
 
     // MARK: 吸附 / 还原
 
     private func toggleSnap(window: AXUIElement, id: CGWindowID, current: CGRect, clickPointCG: CGPoint) {
-        // 已处于上次吸附后的实际位置 → 还原（判断用吸附后实际 frame，兼容有最小尺寸限制的窗口）
-        if let rec = snapMemory[id], current.approxEquals(rec.snapped, tolerance: 4) {
+        layoutStamp = Date() // 双击吸附/还原同样作废甩动路径的在途追踪
+        // 「处于最大化状态」直接比对格子，而不是比对记忆里的吸附后 frame：记忆可能被
+        // App 钳制/记录陈旧；用户手动移动或缩放过后（哪怕只差一点），窗口就不再算
+        // 最大化——双击一律重新最大化，只有精确落在格子里才还原
+        if let rec = snapMemory[id],
+           let cell = bestCell(for: CoordConv.fromCG(current), clickAppKit: CoordConv.fromCG(clickPointCG), clickFirst: true),
+           CoordConv.toCG(cell).approxEquals(current, tolerance: 4) {
             dlog("还原到 \(rec.original)")
             let target = clampedToCurrentScreens(rec.original)
-            let result = windowMgr.setFrame(window, to: target)
-            // 「读到 frame」≠「写入生效」：到达目标附近，或至少离开了吸附位
-            //（App 按最小尺寸等自身约束钳制过）才算还原完成；读回 nil 或纹丝不动
-            // 说明写入被拒——保留记忆，下次双击还能再试
-            if let result, result.approxEquals(target, tolerance: 8) || !result.approxEquals(rec.snapped, tolerance: 4) {
-                snapMemory.removeValue(forKey: id)
-            } else {
-                dlog("还原写入未生效，保留记忆")
+            let stamp = layoutStamp // 入口已 bump；回调时若又有新动作则作废本次结果
+            onLayoutQueue({ [weak self] in
+                self?.windowMgr.setFrame(window, to: target)
+            }) { [weak self] result in
+                guard let self, self.layoutStamp == stamp else { return }
+                // 「读到 frame」≠「写入生效」：到达目标附近，或至少离开了所在格子
+                //（App 按最小尺寸等自身约束钳制过）才算还原完成；读回 nil 或纹丝不动
+                // 说明写入被拒——保留记忆，下次双击还能再试
+                let cellCG = CoordConv.toCG(cell)
+                if let result, result.approxEquals(target, tolerance: 8) || !result.approxEquals(cellCG, tolerance: 4) {
+                    self.snapMemory.removeValue(forKey: id)
+                } else {
+                    self.dlog("还原写入未生效，保留记忆")
+                }
             }
             return
         }
-        // 所在格子 = 与窗口当前可见边界重叠面积最大的格子；无重叠时取光标所在格子
-        guard let cell = bestCell(for: CoordConv.fromCG(current), fallbackAppKit: CoordConv.fromCG(clickPointCG))
+        // 所在格子：双击 = 光标所在格子优先（窗口横跨多个格子时，用户点的是标题栏的
+        // 哪一段就该进哪个格子，而不是按重叠面积猜）；光标不在任何格子里（点在分隔线上）
+        // 才退化为重叠面积最大
+        guard let cell = bestCell(for: CoordConv.fromCG(current), clickAppKit: CoordConv.fromCG(clickPointCG), clickFirst: true)
         else {
             dlog("放行：没找到目标格子")
             return
@@ -1253,35 +1439,138 @@ class TilingController: NSObject {
         snap(window: window, id: id, current: current, to: cell)
     }
 
+    /// 甩动最大化：总是铺满窗口当前所在屏幕的 visibleFrame（普通最大化，不是全屏空间）。
+    /// 不做还原切换——甩动只表达"最大化"这一个意图；已最大化时再甩 = 幂等地再写一次
+    private func wiggleMaximize(pid: pid_t, windowID: CGWindowID) {
+        guard let window = windowMgr.axWindow(pid: pid, windowID: windowID, bounds: .zero),
+              let current = windowMgr.frame(of: window)
+        else { return }
+        maximizeToScreen(window: window, current: current, tag: "甩动最大化")
+    }
+
+    /// 铺满屏幕的核心：Shift 双击路径复用已解析的窗口与 frame，少一轮 AX 往返
+    private func maximizeToScreen(window: AXUIElement, current: CGRect, tag: String) {
+        let point = CoordConv.fromCG(CGPoint(x: current.midX, y: current.midY))
+        guard let screen = NSScreen.screens.first(where: { $0.visibleFrame.contains(point) }) ?? NSScreen.main
+        else { return }
+        let fullCG = CoordConv.toCG(screen.visibleFrame)
+        let stamp = Date()
+        layoutStamp = stamp // 作废所有在途的落定追踪
+        dlog("\(tag) 目标=\(fullCG)")
+        writeFrameTracked(window, to: fullCG, stamp: stamp, tag: tag)
+    }
+
+    /// 全局布局戳：任何新的布局动作（吸附/还原/甩动/手动拖动）都会 bump，让旧的
+    /// 落定追踪作废——否则一次甩动后的补写会把用户紧跟着的双击吸附给盖掉
+    private var layoutStamp = Date()
+
+    /// 布局写入串行队列：AX 写入与 setFrame 的重试睡眠（3 轮 × 60ms）都在这里做——
+    /// 同步放在主线程会让 UI 短暂卡顿；状态（snapMemory 等）仍在主线程更新
+    private let layoutQueue = DispatchQueue(label: "com.sz.bento.tiling.layout")
+
+    /// 在布局队列上执行 AX 读写，完成后回主线程
+    private func onLayoutQueue<T>(_ body: @escaping () -> T, then: @escaping (T) -> Void) {
+        layoutQueue.async {
+            let result = body()
+            DispatchQueue.main.async { then(result) }
+        }
+    }
+
+    /// 写 frame + 落定追踪（0.15/0.7s 两次补写兜底，容差 6）：异步应用 frame 的 App
+    /// 会只应用一半写入（尺寸变大、位置丢半路）——补写要快，甩动的"铺满"才不拖沓。
+    /// 写入与补写都在布局队列执行（不在主线程睡眠）
+    private func writeFrameTracked(_ window: AXUIElement, to target: CGRect, stamp: Date, tag: String) {
+        onLayoutQueue({ [weak self] in
+            self?.windowMgr.setFrame(window, to: target)
+        }) { _ in }
+        for rc in [(0.15, true), (0.35, false), (0.7, true), (1.3, false)] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + rc.0) { [weak self] in
+                guard let self, self.layoutStamp == stamp,
+                      let settled = self.windowMgr.frame(of: window)
+                else { return }
+                if rc.1, !settled.approxEquals(target, tolerance: 6) {
+                    self.onLayoutQueue({ [weak self] in
+                        self?.windowMgr.setFrame(window, to: target)
+                    }) { [weak self] again in
+                        guard let self, self.layoutStamp == stamp, let again else { return }
+                        self.dlog("\(tag)落定补写 目标=\(target) 实际=\(again)")
+                    }
+                }
+            }
+        }
+    }
+
     private func snap(window: AXUIElement, id: CGWindowID, current: CGRect, to cellAppKit: CGRect) {
+        layoutStamp = Date() // 作废甩动路径的在途追踪
         // 只在首次吸附时记录原始位置；反复吸附/在格子间移动不得覆盖
         if snapMemory[id] == nil {
             snapMemory[id] = SnapRecord(original: current, snapped: .zero, lastUsed: Date())
         }
         let target = CoordConv.toCG(cellAppKit)
         let stamp = Date()
-        if let actual = windowMgr.setFrame(window, to: target) {
-            dlog("写入 frame 目标=\(target) 实际=\(actual)")
-            snapMemory[id]?.snapped = actual
-        } else {
-            dlog("写入 frame 失败 目标=\(target)")
-        }
+        layoutStamp = stamp
         snapMemory[id]?.lastUsed = stamp
+        onLayoutQueue({ [weak self] in
+            self?.windowMgr.setFrame(window, to: target)
+        }) { [weak self] actual in
+            guard let self, self.snapMemory[id]?.lastUsed == stamp else { return }
+            if let actual {
+                self.dlog("写入 frame 目标=\(target) 实际=\(actual)")
+                if !actual.approxEquals(target, tolerance: 3) {
+                    // App 自身约束（最小尺寸/步进）钳制，或异步应用还没完成——后续落定重读会再校正
+                    self.dlog("写入与目标偏差大（App 约束钳制/异步应用？）目标=\(target) 实际=\(actual)")
+                }
+                self.snapMemory[id]?.snapped = actual
+            } else {
+                self.dlog("写入 frame 失败 目标=\(target)")
+            }
+        }
 
-        // 终端这类 App 异步/带动画地应用 frame，同步读回可能是中间态；记错了
-        // "吸附后 frame"，下次双击的还原比对就永远不命中。稍后再读一次落定值。
-        // stamp 比对：其间若已还原（记录被删）或又吸附到别的格子，这次就作废。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
-            guard let self, self.snapMemory[id]?.lastUsed == stamp,
-                  let settled = self.windowMgr.frame(of: window),
-                  settled != self.snapMemory[id]?.snapped
-            else { return }
-            self.dlog("落定 frame=\(settled)")
-            self.snapMemory[id]?.snapped = settled
+        // 落定追踪：异步应用 frame 的 App 只应用一半写入时（尺寸到位、位置丢在半路），
+        // 窗口会以错误状态挂着——纠偏要快，但补写也不能堆（每补一次就是一次可见动作）。
+        // 折中：0.35s 第一次补（错误状态只挂一瞬），0.7s 只观察让 App 应用，1.2s 还不齐
+        // 再补一次，之后只记录不再动手。容差 6：App 的像素取整（如 855 vs 851.24）
+        // 不算偏离，避免无谓的"再来一下"。stamp 比对：期间还原/再吸附/手动拖动
+        //（记忆被删）都会让本次追踪作废
+        let rechecks: [(delay: TimeInterval, allowRewrite: Bool)] = [
+            (0.35, true), (0.7, false), (1.2, true), (2.8, false),
+        ]
+        for rc in rechecks {
+            DispatchQueue.main.asyncAfter(deadline: .now() + rc.delay) { [weak self] in
+                guard let self, self.snapMemory[id]?.lastUsed == stamp,
+                      let settled = self.windowMgr.frame(of: window)
+                else { return }
+                if settled != self.snapMemory[id]?.snapped {
+                    self.dlog("落定 frame=\(settled)")
+                }
+                self.snapMemory[id]?.snapped = settled
+                if rc.allowRewrite, !settled.approxEquals(target, tolerance: 6) {
+                    onLayoutQueue({ [weak self] in
+                        self?.windowMgr.setFrame(window, to: target)
+                    }) { [weak self] again in
+                        guard let self, self.snapMemory[id]?.lastUsed == stamp, let again else { return }
+                        self.dlog("落定补写 目标=\(target) 实际=\(again)")
+                        self.snapMemory[id]?.snapped = again
+                    }
+                }
+            }
         }
     }
 
-    private func bestCell(for windowAppKit: CGRect, fallbackAppKit: CGPoint) -> CGRect? {
+    private func bestCell(for windowAppKit: CGRect, clickAppKit: CGPoint, clickFirst: Bool) -> CGRect? {
+        // 双击吸附：光标所在格子优先——窗口横跨多个格子时，按重叠面积猜会猜错
+        // （点右边那段标题栏却吸进左边格子，窗口右缘还可能溢出到隔壁格子里）
+        if clickFirst {
+            for screen in NSScreen.screens {
+                guard screen.visibleFrame.contains(clickAppKit),
+                      let uuid = DisplayKeys.uuid(for: screen)
+                else { continue }
+                let layout = config.layouts[uuid] ?? .cell
+                for (_, rect) in layout.cellRects(in: screen.visibleFrame) where rect.contains(clickAppKit) {
+                    return rect
+                }
+            }
+        }
         var bestRect = CGRect.zero
         var bestArea: CGFloat = 0
         for screen in NSScreen.screens {
@@ -1299,11 +1588,11 @@ class TilingController: NSObject {
         if bestArea > 0 { return bestRect }
         // 无重叠 → 取光标所在格子
         for screen in NSScreen.screens {
-            guard screen.visibleFrame.contains(fallbackAppKit),
+            guard screen.visibleFrame.contains(clickAppKit),
                   let uuid = DisplayKeys.uuid(for: screen)
             else { continue }
             let layout = config.layouts[uuid] ?? .cell
-            for (_, rect) in layout.cellRects(in: screen.visibleFrame) where rect.contains(fallbackAppKit) {
+            for (_, rect) in layout.cellRects(in: screen.visibleFrame) where rect.contains(clickAppKit) {
                 return rect
             }
         }
@@ -1355,8 +1644,7 @@ class TilingController: NSObject {
                                               layout.cellRects(in: screen.visibleFrame).map(\.rect)))
         }
         drag = session
-        showOverlays()
-        updateDragHighlight(at: cgPoint)
+        // 浮层延迟到第一次实际拖动再显示：Shift 双击时按下就建会话，立刻弹网格会闪一下
     }
 
     private func updateDragHighlight(at cgPoint: CGPoint) {
