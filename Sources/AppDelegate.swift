@@ -163,7 +163,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusMenu.addItem(makeItem("编辑分屏布局…", symbol: "squareshape.split.2x2.dotted", action: #selector(editTilingLayouts)))
 
         // 手势提示行（不可点，仅展示）：小字号 + 拆成两行，避免撑宽整个菜单
-        for text in ["双击=吸进格子 · Shift拖=吸附", "Shift双击/甩动=铺满屏幕"] {
+        for text in ["双击=吸进格子 · Shift拖=吸附", "Shift双击/上甩=铺满屏幕"] {
             let hint = NSMenuItem(title: "", action: nil, keyEquivalent: "")
             hint.attributedTitle = NSAttributedString(string: text, attributes: [
                 .font: NSFont.systemFont(ofSize: 10),

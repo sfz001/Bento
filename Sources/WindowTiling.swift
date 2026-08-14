@@ -874,13 +874,13 @@ class LayoutEditorSession: NSObject {
     @objc func cancelEditing() { end(save: false) }
 }
 
-// MARK: 分屏：控制器（event tap、双击/Shift 双击/Shift 拖动/甩动手势状态机、吸附/还原/最大化）
+// MARK: 分屏：控制器（event tap、双击/Shift 双击/Shift 拖动/上甩手势状态机、吸附/还原/最大化）
 
 // 手势一览（全部经由标题栏，红绿灯区与无权限时放行）：
 // - 双击标题栏        = 吸进光标所在格子（窗口已在格子里 → 还原到吸附前）
 // - Shift + 双击标题栏 = 铺满当前屏幕（永远最大化，不还原）
 // - Shift + 拖标题栏   = 网格浮层高亮吸附
-// - 甩标题栏（1.2s 内来回 ≥2 折返、行程 ≥60pt）= 铺满当前屏幕
+// - 按住标题栏快速向上一甩（0.3s 内上移 ≥60pt）= 铺满当前屏幕
 // - 普通拖 / 边缘缩放  = 取消吸附状态（下一个双击重新吸附）
 
 private struct SnapRecord {
@@ -948,16 +948,14 @@ class TilingController: NSObject {
         var moved = false
     }
     private var plainDrag: PlainDragCandidate?
-    /// 甩动最大化跟踪：无修饰键标题栏拖拽的轨迹（折返次数 + 行程），用于"甩一甩 = 铺满屏幕"
-    private final class WiggleTracker {
+    /// 上甩最大化跟踪：无修饰键标题栏拖拽的最近轨迹点（时间戳），
+    /// 用于"抓住标题栏快速向上一甩 = 铺满屏幕"的判定
+    private final class DragPathTracker {
         var downAt: Date
         var points: [(p: CGPoint, t: Date)] = []
-        var lastDirUnit = CGVector.zero
-        var reversals = 0
-        var travel: CGFloat = 0
         init(downAt: Date) { self.downAt = downAt }
     }
-    private var wiggle: WiggleTracker?
+    private var dragPath: DragPathTracker?
     /// 自跟踪双击兜底：上一次 clickState=1 的按下（时间+位置+是否带 Shift）。
     /// 系统偶尔把双击的两次按下都报成 clickState=1，此时只能自己按时间窗+同点距离判定
     private var lastSingleDown: (point: CGPoint, time: Date, mod: Bool)?
@@ -1090,7 +1088,7 @@ class TilingController: NSObject {
         pendingSwallowUp = false
         drag = nil
         plainDrag = nil
-        wiggle = nil
+        dragPath = nil
         lastSingleDown = nil
         axNegativeCache.removeAll()
         hideOverlays()
@@ -1178,8 +1176,8 @@ class TilingController: NSObject {
             if let hit = singleHit {
                 plainDrag = PlainDragCandidate(down: point, pid: hit.pid, windowID: hit.windowID,
                                                resizeZone: false)
-                // 甩动跟踪：标题栏按下即开始记录轨迹
-                wiggle = WiggleTracker(downAt: Date())
+                // 甩动跟踪：标题栏按下即开始记录轨迹（上甩/来回甩共用）
+                dragPath = DragPathTracker(downAt: Date())
             } else if let edge = windowMgr.resizeEdgeHit(at: point) {
                 // 窗口边缘缩放带按下（滚动条的拖拽也落在这条带里，抬起时用 AX 尺寸比对区分）
                 plainDrag = PlainDragCandidate(down: point, pid: edge.pid, windowID: edge.windowID,
@@ -1289,13 +1287,13 @@ class TilingController: NSObject {
         if let plain = plainDrag, plain.moved {
             lastSingleDown = nil // 这次手势消费了按下，别让它跟后续点击配成双击
             layoutStamp = Date() // 手动改动窗口几何：作废所有在途布局追踪，别把窗口拽回去
-            // 甩动判定优先：标题栏来回甩 = 铺满屏幕（永远最大化，不做还原切换）
-            if !plain.resizeZone, let w = wiggle, w.reversals >= 2, w.travel >= 60 {
-                dlog("甩动手势触发 id=\(plain.windowID) 折返=\(w.reversals) 行程=\(Int(w.travel))")
+            // 上甩判定优先：标题栏快速向上一甩 = 铺满屏幕（永远最大化，不做还原切换）
+            if !plain.resizeZone, let tracker = dragPath, isUpwardFlick(tracker.points) {
+                dlog("上甩手势触发 id=\(plain.windowID)")
                 snapMemory.removeValue(forKey: plain.windowID) // 窗口被甩动了，格子吸附状态作废
                 let pid = plain.pid, wid = plain.windowID
                 DispatchQueue.main.async { [weak self] in
-                    self?.wiggleMaximize(pid: pid, windowID: wid)
+                    self?.flingMaximize(pid: pid, windowID: wid)
                 }
             } else if plain.resizeZone {
                 // 缩放带手势：滚动条的拖拽也在边缘带里——AX 确认尺寸真的变了才失效
@@ -1312,7 +1310,7 @@ class TilingController: NSObject {
                 dlog("手动拖动取消吸附状态 id=\(plain.windowID)")
             }
         }
-        wiggle = nil
+        dragPath = nil
         plainDrag = nil
         if pendingSwallowUp {
             // 吞掉与被吞按下配对的抬起（新的真实按下会先清标志，不会错吞正常抬起）
@@ -1333,29 +1331,29 @@ class TilingController: NSObject {
             let dx = event.location.x - plainDrag!.down.x
             let dy = event.location.y - plainDrag!.down.y
             if dx * dx + dy * dy > 36 { plainDrag?.moved = true }
-            if plainDrag?.resizeZone == false { updateWiggle(at: event.location) }
+            if plainDrag?.resizeZone == false { updateDragPath(at: event.location) }
         }
         return Unmanaged.passUnretained(event)
     }
 
-    /// 甩动轨迹跟踪：相邻段方向夹角 ≥120° 记一次折返；段长 ≥12pt 才算段（滤微抖）；
-    /// 超过 1.2s 的轨迹点作废（甩动要快，慢拖不算）
-    private func updateWiggle(at p: CGPoint) {
-        guard let w = wiggle else { return }
+    /// 拖拽轨迹跟踪：保留最近 1.2s 的点（上甩只看尾部 0.3s）
+    private func updateDragPath(at p: CGPoint) {
+        guard let tracker = dragPath else { return }
         let now = Date()
-        w.points.removeAll { now.timeIntervalSince($0.t) > 1.2 }
-        if let last = w.points.last {
-            let seg = hypot(p.x - last.p.x, p.y - last.p.y)
-            guard seg >= 12 else { return }
-            w.travel += seg
-            let u = CGVector(dx: (p.x - last.p.x) / seg, dy: (p.y - last.p.y) / seg)
-            if w.lastDirUnit != .zero {
-                let cosAngle = u.dx * w.lastDirUnit.dx + u.dy * w.lastDirUnit.dy
-                if cosAngle < -0.5 { w.reversals += 1 } // 夹角 ≥ 120°
-            }
-            w.lastDirUnit = u
-        }
-        w.points.append((p, now))
+        tracker.points.removeAll { now.timeIntervalSince($0.t) > 1.2 }
+        tracker.points.append((p, now))
+    }
+
+    /// 上甩判定：拖拽最后 ≤0.3s 内净向上位移 ≥60pt 且速度 ≥200pt/s（快速一甩）
+    private func isUpwardFlick(_ points: [(p: CGPoint, t: Date)]) -> Bool {
+        guard let last = points.last else { return false }
+        let start = last.t.addingTimeInterval(-0.3)
+        guard let first = points.first(where: { $0.t >= start }),
+              last.t.timeIntervalSince(first.t) > 0.03
+        else { return false }
+        let dy = first.p.y - last.p.y // CG 坐标 y 向下：向上为正
+        let dt = last.t.timeIntervalSince(first.t)
+        return dy >= 60 && dy / dt >= 200
     }
 
     private func swallowClick(at point: CGPoint) {
@@ -1439,13 +1437,14 @@ class TilingController: NSObject {
         snap(window: window, id: id, current: current, to: cell)
     }
 
-    /// 甩动最大化：总是铺满窗口当前所在屏幕的 visibleFrame（普通最大化，不是全屏空间）。
-    /// 不做还原切换——甩动只表达"最大化"这一个意图；已最大化时再甩 = 幂等地再写一次
-    private func wiggleMaximize(pid: pid_t, windowID: CGWindowID) {
+    /// 上甩手势最大化：总是铺满窗口当前所在屏幕的 visibleFrame（普通最大化，不是全屏
+    /// 空间）。不做还原切换——手势只表达"最大化"这一个意图；已最大化时再做 = 幂等地
+    /// 再写一次。触发来源：向上一甩（见 isUpwardFlick）
+    private func flingMaximize(pid: pid_t, windowID: CGWindowID) {
         guard let window = windowMgr.axWindow(pid: pid, windowID: windowID, bounds: .zero),
               let current = windowMgr.frame(of: window)
         else { return }
-        maximizeToScreen(window: window, current: current, tag: "甩动最大化")
+        maximizeToScreen(window: window, current: current, tag: "甩动手势最大化")
     }
 
     /// 铺满屏幕的核心：Shift 双击路径复用已解析的窗口与 frame，少一轮 AX 往返
