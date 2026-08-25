@@ -667,6 +667,7 @@ private class EditorView: NSView {
         session?.activateScreen(screenUUID)
 
         let menu = NSMenu()
+        menu.autoenablesItems = false // 否则自动校验会把手动的 merge.isEnabled=false 盖掉
         let splitV = NSMenuItem(title: "左右分割", action: #selector(LayoutEditorSession.splitVertical), keyEquivalent: "")
         splitV.target = session
         let splitH = NSMenuItem(title: "上下分割", action: #selector(LayoutEditorSession.splitHorizontal), keyEquivalent: "")
