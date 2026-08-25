@@ -875,13 +875,13 @@ class LayoutEditorSession: NSObject {
     @objc func cancelEditing() { end(save: false) }
 }
 
-// MARK: 分屏：控制器（event tap、双击/Shift 双击/Shift 拖动/上甩手势状态机、吸附/还原/最大化）
+// MARK: 分屏：控制器（event tap、双击/Shift 双击/Shift 拖动/甩动手势状态机、吸附/还原/最大化）
 
 // 手势一览（全部经由标题栏，红绿灯区与无权限时放行）：
 // - 双击标题栏        = 吸进光标所在格子（窗口已在格子里 → 还原到吸附前）
 // - Shift + 双击标题栏 = 铺满当前屏幕（永远最大化，不还原）
 // - Shift + 拖标题栏   = 网格浮层高亮吸附
-// - 按住标题栏快速向上一甩（0.3s 内上移 ≥60pt）= 铺满当前屏幕
+// - 甩标题栏：向上一甩（0.3s 内上移 ≥60pt）或来回甩（1.2s 内 ≥2 折返、行程 ≥60pt）= 铺满当前屏幕
 // - 普通拖 / 边缘缩放  = 取消吸附状态（下一个双击重新吸附）
 
 private struct SnapRecord {
@@ -949,8 +949,8 @@ class TilingController: NSObject {
         var moved = false
     }
     private var plainDrag: PlainDragCandidate?
-    /// 上甩最大化跟踪：无修饰键标题栏拖拽的最近轨迹点（时间戳），
-    /// 用于"抓住标题栏快速向上一甩 = 铺满屏幕"的判定
+    /// 甩动最大化跟踪：无修饰键标题栏拖拽的最近轨迹点（时间戳），
+    /// 抬起时据此判定"向上一甩"或"来回甩" = 铺满屏幕
     private final class DragPathTracker {
         var downAt: Date
         var points: [(p: CGPoint, t: Date)] = []
@@ -1288,9 +1288,15 @@ class TilingController: NSObject {
         if let plain = plainDrag, plain.moved {
             lastSingleDown = nil // 这次手势消费了按下，别让它跟后续点击配成双击
             layoutStamp = Date() // 手动改动窗口几何：作废所有在途布局追踪，别把窗口拽回去
-            // 上甩判定优先：标题栏快速向上一甩 = 铺满屏幕（永远最大化，不做还原切换）
-            if !plain.resizeZone, let tracker = dragPath, isUpwardFlick(tracker.points) {
-                dlog("上甩手势触发 id=\(plain.windowID)")
+            // 甩动判定优先：上甩或来回甩 = 铺满屏幕（永远最大化，不做还原切换）
+            let flick: String? = {
+                guard !plain.resizeZone, let pts = dragPath?.points else { return nil }
+                if isUpwardFlick(pts) { return "上甩" }
+                if isWiggle(pts) { return "来回甩" }
+                return nil
+            }()
+            if let flick {
+                dlog("\(flick)手势触发 id=\(plain.windowID)")
                 snapMemory.removeValue(forKey: plain.windowID) // 窗口被甩动了，格子吸附状态作废
                 let pid = plain.pid, wid = plain.windowID
                 DispatchQueue.main.async { [weak self] in
@@ -1337,7 +1343,7 @@ class TilingController: NSObject {
         return Unmanaged.passUnretained(event)
     }
 
-    /// 拖拽轨迹跟踪：保留最近 1.2s 的点（上甩只看尾部 0.3s）
+    /// 拖拽轨迹跟踪：保留最近 1.2s 的点（上甩只看尾部 0.3s，来回甩吃整条）
     private func updateDragPath(at p: CGPoint) {
         guard let tracker = dragPath else { return }
         let now = Date()
@@ -1355,6 +1361,29 @@ class TilingController: NSObject {
         let dy = first.p.y - last.p.y // CG 坐标 y 向下：向上为正
         let dt = last.t.timeIntervalSince(first.t)
         return dy >= 60 && dy / dt >= 200
+    }
+
+    /// 来回甩判定：1.2s 的轨迹里出现 ≥2 次折返、总行程 ≥60pt。
+    /// 相邻段夹角 ≥120°（cos < -0.5）记一次折返；段长 <12pt 的微抖并入下一段，不算方向。
+    /// 轨迹点本身已按 1.2s 剪枝，所以这里直接吃整条 points
+    private func isWiggle(_ points: [(p: CGPoint, t: Date)]) -> Bool {
+        var lastDirUnit = CGVector.zero
+        var reversals = 0
+        var travel: CGFloat = 0
+        var anchor: CGPoint? = nil
+        for (p, _) in points {
+            guard let a = anchor else { anchor = p; continue }
+            let seg = hypot(p.x - a.x, p.y - a.y)
+            guard seg >= 12 else { continue } // 微抖：不推进 anchor，等它累积成一整段
+            travel += seg
+            let u = CGVector(dx: (p.x - a.x) / seg, dy: (p.y - a.y) / seg)
+            if lastDirUnit != .zero, u.dx * lastDirUnit.dx + u.dy * lastDirUnit.dy < -0.5 {
+                reversals += 1
+            }
+            lastDirUnit = u
+            anchor = p
+        }
+        return reversals >= 2 && travel >= 60
     }
 
     private func swallowClick(at point: CGPoint) {
@@ -1438,9 +1467,9 @@ class TilingController: NSObject {
         snap(window: window, id: id, current: current, to: cell)
     }
 
-    /// 上甩手势最大化：总是铺满窗口当前所在屏幕的 visibleFrame（普通最大化，不是全屏
+    /// 甩动手势最大化：总是铺满窗口当前所在屏幕的 visibleFrame（普通最大化，不是全屏
     /// 空间）。不做还原切换——手势只表达"最大化"这一个意图；已最大化时再做 = 幂等地
-    /// 再写一次。触发来源：向上一甩（见 isUpwardFlick）
+    /// 再写一次。触发来源：向上一甩（isUpwardFlick）或来回甩（isWiggle）
     private func flingMaximize(pid: pid_t, windowID: CGWindowID) {
         guard let window = windowMgr.axWindow(pid: pid, windowID: windowID, bounds: .zero),
               let current = windowMgr.frame(of: window)
