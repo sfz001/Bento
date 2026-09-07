@@ -291,6 +291,14 @@ struct OnScreenWindowInfo {
 /// 对其它 App 窗口的 AX 读写集中在这里
 class WindowManager {
     private let myPid = ProcessInfo.processInfo.processIdentifier
+
+    init() {
+        // 进程级 AX 消息超时。默认约 6s：目标 App 卡死时，tap 回调里的 AX 往返会把整个
+        // 会话的鼠标事件钉住那么久，随后 tap 还会被系统摘掉。正常 App 的 AX 往返是毫秒级，
+        // 会撞上 0.5s 的只有不响应的 App——放行点击、进负缓存正是那时该有的结果。
+        // 设在系统级元素上，对本进程之后所有 AX 调用生效（含布局队列上的写入）
+        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.5)
+    }
     // 短 TTL 缓存：标题栏点击很常见，每次都全量 CGWindowList 枚举太浪费；
     // 80ms 内的连续调用（含 Shift 双击路径的两次背靠背查询）复用同一份快照
     private var windowsCache: [OnScreenWindowInfo] = []

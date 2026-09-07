@@ -67,6 +67,9 @@ A single app for a grab-bag of small personal utilities. Currently: remote-conne
 ```bash
 ./build_app.sh
 open Bento.app
+# 已在运行时用这个：退出旧实例再启动新包（直接 open 只会激活旧实例）
+# Already running? Use this: quits the old instance, then opens the new bundle
+./build_app.sh --relaunch
 ```
 
 1. 启动后菜单栏出现眼睛图标
@@ -140,6 +143,9 @@ open Bento.app
 ```bash
 ./build_app.sh
 open Bento.app
+# 已在运行时用这个：退出旧实例再启动新包（直接 open 只会激活旧实例）
+# Already running? Use this: quits the old instance, then opens the new bundle
+./build_app.sh --relaunch
 ```
 
 1. An eye icon appears in the menu bar

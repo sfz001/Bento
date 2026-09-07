@@ -71,6 +71,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] _ in
             self?.reassertScreenOffState()
         }
+        // 锁定确认的第二路信号（见 pollLockThenRestore）：loginwindow 上锁时发这个分布式通知
+        DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("com.apple.screenIsLocked"), object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.lastLockNotificationAt = Date()
+        }
         if remoteMonitorEnabled { startPollTimer() }
     }
 
@@ -313,19 +319,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Runs on pollQueue: the pgrep spawns block, so they stay off the
     /// main thread; state changes are applied back on main.
+    /// 探测健康度（noteProbeHealth）只记本轮真正跑过的那几路：RustDesk 已连接时
+    /// 第二路不跑，它的计数保持原样，既不清零也不累加
     private func pollConnectionState() {
         let rustdesk = probeRustDesk()
         if case .connected(let source) = rustdesk {
-            DispatchQueue.main.async { [weak self] in self?.applyConnected(source) }
+            DispatchQueue.main.async { [weak self] in
+                self?.noteProbeHealth("RustDesk", rustdesk)
+                self?.applyConnected(source)
+            }
             return // 已确定连接就不用再跑第二路探测
         }
         let screenSharing = probeScreenSharing()
-        if case .connected(let source) = screenSharing {
-            DispatchQueue.main.async { [weak self] in self?.applyConnected(source) }
-            return
-        }
         DispatchQueue.main.async { [weak self] in
-            self?.applyNotConnected(rustdesk: rustdesk, screenSharing: screenSharing)
+            guard let self else { return }
+            self.noteProbeHealth("RustDesk", rustdesk)
+            self.noteProbeHealth("屏幕共享", screenSharing)
+            if case .connected(let source) = screenSharing {
+                self.applyConnected(source)
+            } else {
+                self.applyNotConnected(rustdesk: rustdesk, screenSharing: screenSharing)
+            }
         }
     }
 
@@ -349,6 +363,35 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// 激活当前会话的来源（"RustDesk" / "Screen Sharing"）；断开确认只看这一路的探测
     private var activeSource: String?
     private var loggedUnknownProbe = false
+
+    // MARK: 探测健康度（主线程）
+    //
+    // 一路探测连续 unknown 到阈值就是「该来源的检测已失效」，必须进状态行 + 换状态栏
+    // 图标，不能只进日志：netstat 那一路在 macOS 27 上永久失效、error.log 每次启动都
+    // 记了、状态行却一直写「监控中」，就这样沉默了六周。只更新本轮真正跑过的探测
+    private var probeUnknownStreak: [String: Int] = [:]
+    private let probeBrokenThreshold = 10 // 3s 一轮 × 10 = 30s，瞬时故障不闪警告
+    private var brokenProbes: [String] {
+        ["RustDesk", "屏幕共享"].filter { (probeUnknownStreak[$0] ?? 0) >= probeBrokenThreshold }
+    }
+
+    private func noteProbeHealth(_ name: String, _ probe: ConnectionProbe) {
+        let before = probeUnknownStreak[name] ?? 0
+        let after: Int
+        if case .unknown = probe {
+            after = min(before + 1, probeBrokenThreshold) // 封顶：够判定即可，不用无限累加
+        } else {
+            after = 0
+        }
+        probeUnknownStreak[name] = after
+        let wasBroken = before >= probeBrokenThreshold
+        let isBroken = after >= probeBrokenThreshold
+        guard wasBroken != isBroken else { return }
+        ErrorLog.log(isBroken
+            ? "远程检测: \(name) 探测连续 \(probeBrokenThreshold) 轮异常（pgrep 失败/超时），该来源的连接检测已失效，状态栏已标记"
+            : "远程检测: \(name) 探测已恢复")
+        updateStatus()
+    }
 
     // 两个 apply 共用的闸门语义：pollConnectionState 是异步交回主线程的，用户在
     // 这中间关掉远程熄屏时 stopPollTimer 只停了后续轮次，拦不住已经算完的这一份。
@@ -402,19 +445,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // ——某一路探测永久 unknown 时，启动首轮的镜像恢复不能被卡住
             if lastPolledConnected != false { screenCtl.disableMirroring() }
             lastPolledConnected = false
-            var brokenProbes: [String] = []
-            if case .unknown = rustdesk { brokenProbes.append("RustDesk") }
-            if case .unknown = screenSharing { brokenProbes.append("屏幕共享") }
-            if !brokenProbes.isEmpty, !loggedUnknownProbe {
-                loggedUnknownProbe = true
-                ErrorLog.log("远程检测: \(brokenProbes.joined(separator: "/")) 探测异常（pgrep 失败/超时），该来源的连接检测失效")
-            }
+            // 空闲态的探测故障不在这里记：noteProbeHealth 按连续轮数判定并进状态栏
         }
     }
 
     /// 确认断开：先锁再撤黑。原顺序（恢复 → 锁）在屏保接管前有一段真实桌面
-    /// 直接可见；现在 gamma 黑幕多留 1.2s 垫底，锁屏就位后才撤，全程无裸露窗口。
-    /// 期间若重新连上，pendingRestore 会被取消，黑幕原样保留
+    /// 直接可见；现在 gamma 黑幕垫底，锁定确认后才撤，全程无裸露窗口。
+    /// 期间若重新连上，pendingRestore 会被取消、代际作废，黑幕原样保留
     private func confirmedDisconnect() {
         disconnectStreak = 0
         sessionPrepared = false
@@ -422,7 +459,51 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSLog("[POLL] No active connection — locking, then restoring screen")
         screenCtl.lockScreen()
         restoreGeneration += 1
-        let gen = restoreGeneration
+        pollLockThenRestore(generation: restoreGeneration, startedAt: Date())
+    }
+
+    // MARK: 撤黑前的锁定确认
+    //
+    // 原来固定等 1.2s：`open -a ScreenSaverEngine` 退出码 0 只说明请求被接受，屏保是否
+    // 盖上、盖上后是否上锁（取决于「屏保开始后要求密码」的延迟设置）代码一概不知，
+    // 而这正是隐私工具最后一道门。现在每 0.25s 查一次会话字典的 CGSSessionScreenIsLocked，
+    // 另收 loginwindow 上锁时发的 com.apple.screenIsLocked 分布式通知作第二路信号；
+    // 确认上锁后再留 0.3s 让屏保画面落定才撤黑。超过预算仍未上锁：记日志 + 状态栏标记，
+    // 然后照旧撤黑——一直黑着的话本地用户回来连菜单都看不见，比裸露更糟
+    private let lockWaitBudget: TimeInterval = 6
+    /// 最近一次收到 com.apple.screenIsLocked 的时刻；只信本次锁屏请求之后到达的
+    private var lastLockNotificationAt: Date?
+    /// 上次断开后未能确认锁定：进状态行，直到下一次确认成功或用户重新开启监控
+    private var lockWarning: String?
+
+    private func pollLockThenRestore(generation gen: Int, startedAt: Date) {
+        guard gen == restoreGeneration else { return }
+        let notified = (lastLockNotificationAt ?? .distantPast) >= startedAt.addingTimeInterval(-1)
+        let locked = notified || ScreenController.isScreenLocked()
+        let waited = Date().timeIntervalSince(startedAt)
+        if locked {
+            if lockWarning != nil {
+                lockWarning = nil
+                updateStatus()
+            }
+            NSLog("[POLL] Screen lock confirmed after \(String(format: "%.2f", waited))s — restoring")
+            scheduleRestore(generation: gen, after: 0.3)
+            return
+        }
+        if waited >= lockWaitBudget {
+            lockWarning = "上次断开后锁屏未确认"
+            ErrorLog.log("锁屏: 断开后 \(Int(lockWaitBudget))s 内未确认锁定，已照常撤黑。请检查「锁定屏幕」设置里屏保开始后要求密码是否为「立即」")
+            scheduleRestore(generation: gen, after: 0)
+            return
+        }
+        let work = DispatchWorkItem { [weak self] in
+            self?.pollLockThenRestore(generation: gen, startedAt: startedAt)
+        }
+        pendingRestore = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+    }
+
+    private func scheduleRestore(generation gen: Int, after delay: TimeInterval) {
         let work = DispatchWorkItem { [weak self] in
             guard let self, gen == self.restoreGeneration else { return }
             self.pendingRestore = nil
@@ -433,7 +514,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self.updateStatus()
         }
         pendingRestore = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     // MARK: - UI Updates
@@ -449,7 +530,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func setStatusSymbol(_ name: String, description: String? = nil) {
         guard currentStatusSymbol != name else { return }
         currentStatusSymbol = name
+        // 符号名在旧系统上可能不存在：回退到 eye，绝不让状态栏按钮变成空图标
         statusItem.button?.image = NSImage(systemSymbolName: name, accessibilityDescription: description)
+            ?? NSImage(systemSymbolName: "eye", accessibilityDescription: description)
         statusItem.button?.title = ""
     }
 
@@ -469,17 +552,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             statusItem.button?.toolTip = tooltip("远程熄屏监控已停用")
             return
         }
+        // 探测失效 / 锁屏未确认：进状态行 + 换状态栏图标。只进日志的故障等于没报
+        var warnings: [String] = []
+        let broken = brokenProbes
+        if !broken.isEmpty { warnings.append("\(broken.joined(separator: "/"))探测不可用") }
+        if let lockWarning { warnings.append(lockWarning) }
+        let suffix = warnings.isEmpty ? "" : " · " + warnings.joined(separator: " · ")
         if screenCtl.isScreenBlack {
-            statusMenuItem.title = "远程已连接 · 已熄屏"
+            statusMenuItem.title = "远程已连接 · 已熄屏" + suffix
             statusMenuItem.image = NSImage(systemSymbolName: "eye.slash.fill", accessibilityDescription: nil)
             // 熄屏态只换图标不加文字：菜单栏空间是稀缺资源（尤其拥挤栏），语义放 tooltip
             setStatusSymbol("eye.slash.fill", description: "Bento 已熄屏")
-            statusItem.button?.toolTip = "远程已连接 · 已熄屏"
+            statusItem.button?.toolTip = "远程已连接 · 已熄屏" + suffix
         } else {
-            statusMenuItem.title = "监控中"
-            statusMenuItem.image = NSImage(systemSymbolName: "checkmark.circle", accessibilityDescription: nil)
-            setStatusSymbol("eye", description: "Bento")
-            statusItem.button?.toolTip = tooltip("Bento")
+            statusMenuItem.title = "监控中" + suffix
+            statusMenuItem.image = NSImage(systemSymbolName: warnings.isEmpty ? "checkmark.circle" : "exclamationmark.triangle",
+                                           accessibilityDescription: nil)
+            setStatusSymbol(warnings.isEmpty ? "eye" : "eye.trianglebadge.exclamationmark",
+                            description: warnings.isEmpty ? "Bento" : "Bento · " + warnings.joined(separator: "，"))
+            statusItem.button?.toolTip = tooltip("Bento" + suffix)
         }
     }
 
@@ -610,6 +701,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.set(remoteMonitorEnabled, forKey: "RemoteMonitorEnabled")
         remoteMonitorItem.state = remoteMonitorEnabled ? .on : .off
         if remoteMonitorEnabled {
+            lockWarning = nil // 用户重新开启 = 重新给一次机会，旧警告不再挂着
             startPollTimer()
         } else {
             stopPollTimer()

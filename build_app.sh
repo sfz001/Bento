@@ -232,3 +232,29 @@ codesign --verify --strict "$APP_BUNDLE"
 
 echo "Done: $APP_BUNDLE"
 echo "Run: open $APP_BUNDLE"
+
+# --relaunch：退出正在运行的实例，再启动新包。直接 `open Bento.app` 对着已在运行的
+# 同路径 App 只会激活旧实例，新构建根本不会启动（2026-09-08 修探测那次就是这样
+# 「修好了却没生效」）。TERM 在 App 内已转成 terminate(nil)，会走 applicationWillTerminate 收尾
+RELAUNCH=0
+for arg in "$@"; do
+    [ "$arg" = "--relaunch" ] && RELAUNCH=1
+done
+if [ "$RELAUNCH" = "1" ]; then
+    if pgrep -x "$APP_NAME" >/dev/null 2>&1; then
+        echo "Stopping running $APP_NAME..."
+        pkill -x "$APP_NAME" || true
+        for _ in $(seq 1 100); do
+            pgrep -x "$APP_NAME" >/dev/null 2>&1 || break
+            sleep 0.1
+        done
+        if pgrep -x "$APP_NAME" >/dev/null 2>&1; then
+            echo "warning: 旧实例 10s 内未退出，改发 SIGKILL" >&2
+            pkill -9 -x "$APP_NAME" || true
+            sleep 0.5
+        fi
+    fi
+    open "$APP_BUNDLE"
+    sleep 1
+    echo "Relaunched: pid $(pgrep -x "$APP_NAME" | head -1)"
+fi

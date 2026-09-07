@@ -265,6 +265,14 @@ class ScreenController {
 
     func switchResolution() {
         let main = CGMainDisplayID()
+        // 1512×982 HiDPI 是 14" MacBook Pro 内置屏的模式，只对内置屏执行。外接屏的模式表里
+        // 往往也有这一档（2026-09-08 实测两块 Studio Display 都有），不加门槛就会把外接主屏
+        // 切糊、还多一次显示重配置；没有内置屏的 Mac 上这一步因此是真正的 no-op。
+        // restoreResolution 不受影响：盘上若有旧快照（任何显示器的）照常恢复
+        guard CGDisplayIsBuiltin(main) != 0 else {
+            NSLog("Resolution switch skipped: main display \(main) is not built-in")
+            return
+        }
         let currentMode = CGDisplayCopyDisplayMode(main)
 
         guard let modes = CGDisplayCopyAllDisplayModes(main, displayModeOptions) as? [CGDisplayMode] else { return }
@@ -533,6 +541,14 @@ class ScreenController {
         isBlack = false
         gammaTouched = false
         loggedBlackFailure = false
+    }
+
+    /// 会话是否已锁定（屏保已上锁）。CGSSessionScreenIsLocked 不在公开头文件里，但从
+    /// 10.x 到 26 一直在会话字典里：锁定时为 true，未锁定时键不存在——键缺失即未锁。
+    /// 撤黑前的确认用它（AppDelegate.pollLockThenRestore），另有分布式通知作第二路
+    static func isScreenLocked() -> Bool {
+        guard let dict = CGSessionCopyCurrentDictionary() as NSDictionary? else { return false }
+        return (dict["CGSSessionScreenIsLocked"] as? Bool) ?? false
     }
 
     func lockScreen() {
