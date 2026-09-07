@@ -278,7 +278,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         pollTimer = nil
     }
 
-    /// 探测三态：进程 spawn 失败 / 看门狗超时杀 / netstat 输出异常都不是「没有连接」。
+    /// 探测三态：进程 spawn 失败 / 看门狗超时杀都不是「没有连接」。
     /// 原实现把一切失败折叠成 false——远程会话中一次瞬时故障就恢复亮屏 + 锁定，
     /// 本地桌面直接暴露一个轮询周期，还把对面正在操作的会话打断
     private enum ConnectionProbe {
@@ -295,28 +295,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// 屏幕共享（VNC）探测看进程而不是看端口：screensharingd 由 launchd 的 socket
+    /// 监听按需拉起——连接一被接受（早于密码认证）就启动，最后一个观看端断开约 15s
+    /// 后退出（2026-09-07 会话的统一日志实测，同会话的 ScreensharingAgent 生命周期相同）。
+    /// 所以 pgrep 的退出码语义和 RustDesk 那一路完全一样，断开确认只是多等这 15s。
+    /// 之前解析 `netstat -an -p tcp`：macOS 27（26A5425a）上 net.inet.tcp.pcblist*
+    /// 这组 sysctl 已经不存在，netstat 对任何非 root 进程都输出空表（沙箱内外一样），
+    /// 探测永远 unknown，屏幕共享会话从来没触发过熄屏——别改回去。
+    /// 必须 `-x` 精确匹配：RemoteManagement 的 ScreenSharingSubscriber 常驻，模糊匹配会误报
     private func probeScreenSharing() -> ConnectionProbe {
-        // 只匹配本地地址列（第 4 列）：本机主动连别人 5900 不算。
-        // 直接跑 netstat 在 Swift 里解析，省掉 sh+awk 两个进程
-        let r = runProcess("/usr/sbin/netstat", ["-an", "-p", "tcp"], captureOutput: true)
-        // netstat 正常运行绝不会输出空——空输出/非零退出都是探测手段故障
-        guard r.status == 0, !r.output.isEmpty else { return .unknown }
-        for line in r.output.split(separator: "\n") {
-            let cols = line.split(separator: " ", omittingEmptySubsequences: true)
-            if cols.count >= 6, cols[3].hasSuffix(".5900"), cols[5] == "ESTABLISHED" {
-                return .connected("Screen Sharing")
-            }
+        switch runProcess("/usr/bin/pgrep", ["-x", "screensharingd"]).status {
+        case 0: return .connected("Screen Sharing")
+        case 1: return .disconnected
+        default: return .unknown
         }
-        return .disconnected
     }
 
-    /// Runs on pollQueue: process/netstat checks block, so they stay off the
+    /// Runs on pollQueue: the pgrep spawns block, so they stay off the
     /// main thread; state changes are applied back on main.
     private func pollConnectionState() {
         let rustdesk = probeRustDesk()
         if case .connected(let source) = rustdesk {
             DispatchQueue.main.async { [weak self] in self?.applyConnected(source) }
-            return // 已确定连接就不用再跑 netstat
+            return // 已确定连接就不用再跑第二路探测
         }
         let screenSharing = probeScreenSharing()
         if case .connected(let source) = screenSharing {
@@ -377,7 +378,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 两路探测都不是「确定连接」时的处理。关键规则：黑屏会话的断开确认
     /// **只看激活这次会话的那一路探测**——另一路可能在本机永远不可用
-    /// （实测 netstat 在子进程里可能整张 TCP 表不可见，永远 unknown），
+    /// （旧的 netstat 探测在 macOS 27 上就是永远 unknown，见 probeScreenSharing），
     /// 要求它也「确定断开」等于 RustDesk 会话结束后黑屏永不恢复。
     /// 它既然从来探不到连接，也不可能是这次会话的激活来源
     private func applyNotConnected(rustdesk: ConnectionProbe, screenSharing: ConnectionProbe) {
@@ -398,12 +399,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         } else {
             // 空闲态：镜像清理是幂等兜底（只在有残留快照时动手），unknown 也照走
-            // ——netstat 永久 unknown 的机器上，启动首轮的镜像恢复不能被卡住
+            // ——某一路探测永久 unknown 时，启动首轮的镜像恢复不能被卡住
             if lastPolledConnected != false { screenCtl.disableMirroring() }
             lastPolledConnected = false
-            if case .unknown = screenSharing, !loggedUnknownProbe {
+            var brokenProbes: [String] = []
+            if case .unknown = rustdesk { brokenProbes.append("RustDesk") }
+            if case .unknown = screenSharing { brokenProbes.append("屏幕共享") }
+            if !brokenProbes.isEmpty, !loggedUnknownProbe {
                 loggedUnknownProbe = true
-                ErrorLog.log("远程检测: netstat 探测不可用（输出为空/失败），屏幕共享检测失效；RustDesk 检测不受影响")
+                ErrorLog.log("远程检测: \(brokenProbes.joined(separator: "/")) 探测异常（pgrep 失败/超时），该来源的连接检测失效")
             }
         }
     }
