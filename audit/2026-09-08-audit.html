@@ -180,7 +180,7 @@
     <a href="#open">待处理</a>
     <a href="#sound">判定稳妥的部分</a>
     <a href="#evidence">附录：证据</a>
-    <a href="#fixed">已修复 · 16 项</a>
+    <a href="#fixed">已修复 · 17 项</a>
   </nav>
 
   <main>
@@ -215,8 +215,8 @@
         <div class="tile" data-k="high"><div class="n">3</div><div class="l">高</div></div>
         <div class="tile" data-k="medium"><div class="n">9</div><div class="l">中</div></div>
         <div class="tile" data-k="low"><div class="n">16</div><div class="l">低 / 提示</div></div>
-        <div class="tile" data-k="done"><div class="n">16</div><div class="l">已完整修复</div></div>
-        <div class="tile" data-k="open"><div class="n">14</div><div class="l">待完成 · 含 2 项部分修复</div></div>
+        <div class="tile" data-k="done"><div class="n">17</div><div class="l">已完整修复</div></div>
+        <div class="tile" data-k="open"><div class="n">13</div><div class="l">待完成 · 含 2 项部分修复</div></div>
       </div>
       <div class="actions">
         <div class="eyebrow">待处理项里建议优先的三件</div>
@@ -250,14 +250,13 @@
 
     <section id="status">
       <h2>发现总览</h2>
-      <p class="prose" style="color:var(--muted)">共 30 项：16 项完整修复，2 项部分修复，12 项待处理。未完成项优先展示，已修复行置灰、划线并排在表格末尾。</p>
+      <p class="prose" style="color:var(--muted)">共 30 项：17 项完整修复，2 项部分修复，11 项待处理。未完成项优先展示，已修复行置灰、划线并排在表格末尾。</p>
       <div class="table-wrap">
         <table>
           <thead><tr><th>编号</th><th>严重度</th><th>状态</th><th>提交</th><th>问题</th></tr></thead>
           <tbody>
             <tr data-status="partial"><td class="nw"><a href="#X-7">X-7</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="partial">部分修复</span></td><td class="nw mono">3db76ad</td><td>文档与代码不符（CLAUDE.md 已更正，README 仍有漂移）</td></tr>
             <tr data-status="partial"><td class="nw"><a href="#X-2">X-2</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="partial">部分修复</span></td><td class="nw mono">a9e6afb</td><td>已补镜像恢复测试，完整熄屏流程仍缺演练入口</td></tr>
-            <tr><td class="nw"><a href="#X-8">X-8</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>熄屏本身不留日志痕迹，事后无法确认屏幕是否真的黑过</td></tr>
             <tr><td class="nw"><a href="#minor">其余 8 条</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>体验瑕疵与工程卫生，见「零散项」</td></tr>
             <tr><td class="nw"><a href="#icons">图标模块 3 项</a></td><td class="nw"><span class="chip" data-sev="info">提示</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>已停用的图标管理模块，重新启用前需处理</td></tr>
             <tr data-status="done"><td class="nw"><a href="#M-1">M-1</a></td><td class="nw"><span class="chip" data-sev="critical">严重</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">b17e1b2</td><td>硬件镜像组里 <code>CGDisplayMirrorsDisplay</code> 恒为 0，镜像永远拆不掉且快照被清</td></tr>
@@ -276,6 +275,7 @@
             <tr data-status="done"><td class="nw"><a href="#X-1">X-1</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：X-1</td><td>Swift 运行时 trap 不进 error.log</td></tr>
             <tr data-status="done"><td class="nw"><a href="#R-9">R-9</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：R-9</td><td>目标分辨率同时匹配当前刷新率，并优先选择差值最小的模式；0 Hz 动态/未知刷新率只与 0 匹配，没有合适模式则跳过切换</td></tr>
             <tr data-status="done"><td class="nw"><a href="#R-10">R-10</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：R-10</td><td>退出时等待 Dock 队列设置 2 秒总预算；超时正常退出并保留已有快照，下次启动补偿</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#X-8">X-8</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：X-8</td><td>熄屏本身不留日志痕迹，事后无法确认屏幕是否真的黑过</td></tr>
           </tbody>
         </table>
       </div>
@@ -318,13 +318,6 @@
         </div>
       </article>
 
-      <article class="finding" id="X-8" data-sev="low">
-        <div class="head"><span class="chip" data-sev="low">低</span><span class="id">X-8</span><h3>熄屏本身不留日志痕迹</h3></div>
-        <div class="kv">
-          <div class="k">问题</div><div class="v"><p>镜像、分辨率、Dock 三项在统一日志里都留下了可核对的痕迹，唯独 gamma 压黑没有：<code>CGSetDisplayTransferByFormula</code> 不产生任何日志。本次审计因此无法从日志确认 02:56 那次屏幕是否真的黑了，只能从代码路径推断。对一个隐私工具，这是最该能事后核对的一件事。</p></div>
-          <div class="k">建议</div><div class="v"><p>压黑与撤黑各记一行 <code>NSLog</code>，带上成功的显示器数量。成本为零，且直接支撑 R-8 的健康度判断。</p></div>
-        </div>
-      </article>
 
       <h3 id="minor" style="padding-top:8px">零散项</h3>
       <div class="table-wrap">
@@ -423,7 +416,7 @@ CGCompleteDisplayConfiguration: err 1014 (1 块)
     </section>
 
     <section id="fixed">
-      <h2>已修复 · 16 项</h2>
+      <h2>已修复 · 17 项</h2>
       <p class="prose" style="color:var(--muted)">以下条目已对照当前代码确认完成，移至报告底部归档。标题加删除线，正文与标签置灰；修复依据保留供追溯。部分修复项仍在待处理区。</p>
 
       <article class="finding" data-status="done" id="M-1" data-sev="critical">
@@ -574,6 +567,15 @@ CGCompleteDisplayConfiguration: err 1014 (1 块)
         <div class="head"><span class="chip" data-st="done">已修复</span><span class="id">R-10</span><h3>退出时等待 Dock 队列设置 2 秒总预算；超时正常退出并保留已有快照，下次启动补偿</h3></div>
         <div class="kv"><div class="k">原问题</div><div class="v">退出时同步等待 Dock 队列，最坏约五十秒，注销与关机会被拖慢。给一个总预算，超时放行，下次启动的崩溃恢复会补救。</div>
           <div class="k">本次修复</div><div class="v">退出时等待 Dock 队列设置 2 秒总预算；超时正常退出并保留已有快照，下次启动补偿。阻塞队列超时与解除阻塞后正常排空的回归通过，类型检查通过。</div></div>
+      </article>
+
+      <article class="finding" data-status="done" id="X-8" data-sev="low">
+        <div class="head"><span class="chip" data-st="done">已修复</span><span class="chip" data-sev="low">低</span><span class="id">X-8</span><h3>熄屏本身不留日志痕迹</h3></div>
+        <div class="kv">
+          <div class="k">问题</div><div class="v"><p>镜像、分辨率、Dock 三项在统一日志里都留下了可核对的痕迹，唯独 gamma 压黑没有：<code>CGSetDisplayTransferByFormula</code> 不产生任何日志。本次审计因此无法从日志确认 02:56 那次屏幕是否真的黑了，只能从代码路径推断。对一个隐私工具，这是最该能事后核对的一件事。</p></div>
+          <div class="k">建议</div><div class="v"><p>压黑与撤黑各记一行 <code>NSLog</code>，带上成功的显示器数量。成本为零，且直接支撑 R-8 的健康度判断。</p></div>
+          <div class="k">本次修复</div><div class="v"><p>gamma 全部施加成功时记录显示器数量；撤黑时记录全局恢复请求和在线数量。恢复 API 无返回值，日志明确区分已请求与硬件验证成功；原有部分失败日志保留。类型检查通过。</p></div>
+        </div>
       </article>
     </section>
 

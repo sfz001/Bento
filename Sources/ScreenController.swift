@@ -649,6 +649,7 @@ class ScreenController {
         if failed.isEmpty {
             isBlack = true
             loggedBlackFailure = false
+            NSLog("Gamma blackout applied successfully to \(displays.count) display(s)")
         } else if !loggedBlackFailure {
             loggedBlackFailure = true
             ErrorLog.log("熄屏: \(failed.count)/\(displays.count) 台显示器置黑失败 \(failed)，保持未熄屏状态待重试")
@@ -675,7 +676,10 @@ class ScreenController {
 
     func restore() {
         guard gammaTouched else { return } // 见 gammaTouched 声明处：不能用 isBlack 当门槛
+        let count = onlineDisplays().count
         CGDisplayRestoreColorSyncSettings()
+        // 此 API 无返回值，只记录已发出全局恢复，不声称硬件读回验证成功。
+        NSLog("Gamma restore requested for all displays (\(count) online)")
         isBlack = false
         gammaTouched = false
         loggedBlackFailure = false
