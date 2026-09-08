@@ -180,7 +180,7 @@
     <a href="#open">待处理</a>
     <a href="#sound">判定稳妥的部分</a>
     <a href="#evidence">附录：证据</a>
-    <a href="#fixed">已修复 · 12 项</a>
+    <a href="#fixed">已修复 · 13 项</a>
   </nav>
 
   <main>
@@ -215,14 +215,13 @@
         <div class="tile" data-k="high"><div class="n">3</div><div class="l">高</div></div>
         <div class="tile" data-k="medium"><div class="n">9</div><div class="l">中</div></div>
         <div class="tile" data-k="low"><div class="n">16</div><div class="l">低 / 提示</div></div>
-        <div class="tile" data-k="done"><div class="n">12</div><div class="l">已完整修复</div></div>
-        <div class="tile" data-k="open"><div class="n">18</div><div class="l">待完成 · 含 2 项部分修复</div></div>
+        <div class="tile" data-k="done"><div class="n">13</div><div class="l">已完整修复</div></div>
+        <div class="tile" data-k="open"><div class="n">17</div><div class="l">待完成 · 含 2 项部分修复</div></div>
       </div>
       <div class="actions">
         <div class="eyebrow">待处理项里建议优先的三件</div>
         <ol>
           <li><b>补一个熄屏演练入口。</b>整条链路仍然只被真实会话验证过一次，而唯一的验证方式是让人远程连进来，或者让局域网扫一下 5900 端口，后者会直接黑屏加锁屏。菜单里加一项「模拟远程连接」才能让这条链路可被例行验证。见 <a href="#X-2">X-2</a>。</li>
-          <li><b>给甩动手势加位移校验。</b>浏览器标签页往上一拖分离成新窗口，轨迹正好满足上甩判定，源窗口会被莫名最大化。见 <a href="#T-2">T-2</a>。</li>
         </ol>
       </div>
     </section>
@@ -251,13 +250,12 @@
 
     <section id="status">
       <h2>发现总览</h2>
-      <p class="prose" style="color:var(--muted)">共 30 项：12 项完整修复，2 项部分修复，16 项待处理。未完成项优先展示，已修复行置灰、划线并排在表格末尾。</p>
+      <p class="prose" style="color:var(--muted)">共 30 项：13 项完整修复，2 项部分修复，15 项待处理。未完成项优先展示，已修复行置灰、划线并排在表格末尾。</p>
       <div class="table-wrap">
         <table>
           <thead><tr><th>编号</th><th>严重度</th><th>状态</th><th>提交</th><th>问题</th></tr></thead>
           <tbody>
             <tr data-status="partial"><td class="nw"><a href="#X-7">X-7</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="partial">部分修复</span></td><td class="nw mono">3db76ad</td><td>文档与代码不符（CLAUDE.md 已更正，README 仍有漂移）</td></tr>
-            <tr><td class="nw"><a href="#T-2">T-2</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>甩动手势按几何判定，浏览器标签页拖拽会误触发最大化</td></tr>
             <tr><td class="nw"><a href="#X-1">X-1</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>Swift 运行时 trap 不进 error.log</td></tr>
             <tr data-status="partial"><td class="nw"><a href="#X-2">X-2</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="partial">部分修复</span></td><td class="nw mono">a9e6afb</td><td>已补镜像恢复测试，完整熄屏流程仍缺演练入口</td></tr>
             <tr><td class="nw"><a href="#X-8">X-8</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>熄屏本身不留日志痕迹，事后无法确认屏幕是否真的黑过</td></tr>
@@ -275,6 +273,7 @@
             <tr data-status="done"><td class="nw"><a href="#R-5">R-5</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：R-5</td><td>施加与撤销顺序不是后进先出</td></tr>
             <tr data-status="done"><td class="nw"><a href="#R-6">R-6</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：R-6</td><td>分辨率快照的「不覆盖」规则不区分显示器</td></tr>
             <tr data-status="done"><td class="nw"><a href="#R-7">R-7</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：R-7</td><td>探测只看进程名，端口扫描即可触发熄屏与锁屏</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#T-2">T-2</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：T-2</td><td>甩动手势按几何判定，浏览器标签页拖拽会误触发最大化</td></tr>
           </tbody>
         </table>
       </div>
@@ -288,14 +287,6 @@
 
 
 
-      <article class="finding" id="T-2" data-sev="medium">
-        <div class="head"><span class="chip" data-sev="medium">中</span><span class="id">T-2</span><h3>甩动手势按几何判定，浏览器标签页拖拽会误触发最大化</h3></div>
-        <div class="kv">
-          <div class="k">位置</div><div class="v loc">Sources/WindowTiling.swift，handleMouseUp 与 isUpwardFlick / isWiggle</div>
-          <div class="k">问题</div><div class="v"><p>「标题栏带」是窗口顶部 28 点的纯几何区域，浏览器标签栏和 Electron 自定义标题栏都落在里面。把一个标签页快速向上拖出去分离成新窗口，轨迹正好满足「0.3 秒内上移 60 点、速度 200 点每秒」，源窗口会被最大化。缩放带路径已经用 AX 尺寸比对区分了滚动条拖拽，移动路径没有对等的校验。</p></div>
-          <div class="k">建议</div><div class="v"><p>抬起时比对该窗口在窗口列表里的位置与按下时的差值。窗口没有跟着光标位移，就不是窗口拖动。窗口列表缓存已有，零额外开销。</p></div>
-        </div>
-      </article>
 
       <article class="finding" id="X-1" data-sev="medium">
         <div class="head"><span class="chip" data-sev="medium">中</span><span class="id">X-1</span><h3>Swift 运行时 trap 不进 error.log</h3></div>
@@ -439,7 +430,7 @@ CGCompleteDisplayConfiguration: err 1014 (1 块)
     </section>
 
     <section id="fixed">
-      <h2>已修复 · 12 项</h2>
+      <h2>已修复 · 13 项</h2>
       <p class="prose" style="color:var(--muted)">以下条目已对照当前代码确认完成，移至报告底部归档。标题加删除线，正文与标签置灰；修复依据保留供追溯。部分修复项仍在待处理区。</p>
 
       <article class="finding" data-status="done" id="M-1" data-sev="critical">
@@ -558,6 +549,16 @@ CGCompleteDisplayConfiguration: err 1014 (1 块)
           </ul><p>这条在探测修好之后才真正有意义，此前那一路根本不会响应。</p></div>
           <div class="k">建议</div><div class="v"><p>拿到 pid 后用 <code>proc_pidpath</code> 校验可执行文件路径。屏幕共享这一路可再叠一个「已认证会话」信号，或对连接建立也要求两轮确认，避免三秒内自结束的扫描触发整套动作。</p></div>
           <div class="k">本次修复</div><div class="v"><p>RustDesk 校验内核返回的可执行文件路径和 --cm 参数；屏幕共享同时校验 Apple 守护进程路径、PID/启动时间和本次进程的认证成功日志。仅端口扫描不会触发。认证信号不可读或长期缺失进入探测告警。历史真实日志格式核验和注入式探测回归通过；新版端到端远程会话仍需复测。</p></div>
+        </div>
+      </article>
+
+      <article class="finding" data-status="done" id="T-2" data-sev="medium">
+        <div class="head"><span class="chip" data-st="done">已修复</span><span class="chip" data-sev="medium">中</span><span class="id">T-2</span><h3>甩动手势按几何判定，浏览器标签页拖拽会误触发最大化</h3></div>
+        <div class="kv">
+          <div class="k">位置</div><div class="v loc">Sources/WindowTiling.swift，handleMouseUp 与 isUpwardFlick / isWiggle</div>
+          <div class="k">问题</div><div class="v"><p>「标题栏带」是窗口顶部 28 点的纯几何区域，浏览器标签栏和 Electron 自定义标题栏都落在里面。把一个标签页快速向上拖出去分离成新窗口，轨迹正好满足「0.3 秒内上移 60 点、速度 200 点每秒」，源窗口会被最大化。缩放带路径已经用 AX 尺寸比对区分了滚动条拖拽，移动路径没有对等的校验。</p></div>
+          <div class="k">建议</div><div class="v"><p>抬起时比对该窗口在窗口列表里的位置与按下时的差值。窗口没有跟着光标位移，就不是窗口拖动。窗口列表缓存已有，零额外开销。</p></div>
+          <div class="k">本次修复</div><div class="v"><p>甩动前校验同一 PID/windowID 的窗口实际位移，抬起时强制刷新窗口列表；途中移动后回到原点仍可识别来回甩。标签页拖动不再最大化源窗口，也不清除源窗口吸附记忆。几何回归与类型检查通过。</p></div>
         </div>
       </article>
     </section>

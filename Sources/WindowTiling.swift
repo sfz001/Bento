@@ -305,8 +305,8 @@ class WindowManager {
     private var windowsCacheAt = Date.distantPast
 
     /// 当前屏幕上 layer-0 窗口（front-to-back），排除本进程（避免拦到自己）
-    func onScreenWindows() -> [OnScreenWindowInfo] {
-        if Date().timeIntervalSince(windowsCacheAt) < 0.08 { return windowsCache }
+    func onScreenWindows(forceRefresh: Bool = false) -> [OnScreenWindowInfo] {
+        if !forceRefresh, Date().timeIntervalSince(windowsCacheAt) < 0.08 { return windowsCache }
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
         else { return [] }
         var result: [OnScreenWindowInfo] = []
@@ -953,6 +953,8 @@ class TilingController: NSObject {
         var down: CGPoint
         var pid: pid_t
         var windowID: CGWindowID
+        var initialOrigin: CGPoint
+        var windowMoved = false
         var resizeZone: Bool // 按下落在窗口边缘缩放带（滚动条也在这里，抬起时需 AX 尺寸比对区分）
         var moved = false
     }
@@ -1184,13 +1186,13 @@ class TilingController: NSObject {
             singleHit = windowMgr.titlebarHit(at: point, bandHeight: TilingController.titleBarBandHeight)
             if let hit = singleHit {
                 plainDrag = PlainDragCandidate(down: point, pid: hit.pid, windowID: hit.windowID,
-                                               resizeZone: false)
+                                               initialOrigin: hit.bounds.origin, resizeZone: false)
                 // 甩动跟踪：标题栏按下即开始记录轨迹（上甩/来回甩共用）
                 dragPath = DragPathTracker(downAt: Date())
             } else if let edge = windowMgr.resizeEdgeHit(at: point) {
                 // 窗口边缘缩放带按下（滚动条的拖拽也落在这条带里，抬起时用 AX 尺寸比对区分）
                 plainDrag = PlainDragCandidate(down: point, pid: edge.pid, windowID: edge.windowID,
-                                               resizeZone: true)
+                                               initialOrigin: edge.bounds.origin, resizeZone: true)
             } else {
                 plainDrag = nil
             }
@@ -1293,12 +1295,18 @@ class TilingController: NSObject {
         if drag != nil { finishDrag() }
         // 手动拖动结束：拖过的窗口取消吸附记忆——用户拖动就代表"最大化状态已取消"，
         // 下次双击应重新吸附，而不是还原到拖动前的位置
-        if let plain = plainDrag, plain.moved {
+        if var plain = plainDrag, plain.moved {
+            if !plain.resizeZone {
+                let current = windowMgr.onScreenWindows(forceRefresh: true).first {
+                    $0.id == plain.windowID && $0.pid == plain.pid
+                }?.bounds.origin
+                plain.windowMoved = plain.windowMoved || TilingGeometry.windowMoved(from: plain.initialOrigin, to: current)
+            }
             lastSingleDown = nil // 这次手势消费了按下，别让它跟后续点击配成双击
             layoutStamp = Date() // 手动改动窗口几何：作废所有在途布局追踪，别把窗口拽回去
             // 甩动判定优先：上甩或来回甩 = 铺满屏幕（永远最大化，不做还原切换）
             let flick: String? = {
-                guard !plain.resizeZone, let pts = dragPath?.points else { return nil }
+                guard !plain.resizeZone, plain.windowMoved, let pts = dragPath?.points else { return nil }
                 if isUpwardFlick(pts) { return "上甩" }
                 if isWiggle(pts) { return "来回甩" }
                 return nil
@@ -1321,7 +1329,7 @@ class TilingController: NSObject {
                         self.dlog("手动缩放取消吸附状态 id=\(plain.windowID)")
                     }
                 }
-            } else if snapMemory.removeValue(forKey: plain.windowID) != nil {
+            } else if plain.windowMoved, snapMemory.removeValue(forKey: plain.windowID) != nil {
                 dlog("手动拖动取消吸附状态 id=\(plain.windowID)")
             }
         }
@@ -1346,7 +1354,15 @@ class TilingController: NSObject {
             let dx = event.location.x - plainDrag!.down.x
             let dy = event.location.y - plainDrag!.down.y
             if dx * dx + dy * dy > 36 { plainDrag?.moved = true }
-            if plainDrag?.resizeZone == false { updateDragPath(at: event.location) }
+            if var plain = plainDrag, !plain.resizeZone {
+                let current = windowMgr.onScreenWindows().first {
+                    $0.id == plain.windowID && $0.pid == plain.pid
+                }?.bounds.origin
+                // 记录途中位移，来回甩回到起点仍然是有效窗口拖动。
+                plain.windowMoved = plain.windowMoved || TilingGeometry.windowMoved(from: plain.initialOrigin, to: current)
+                plainDrag = plain
+                updateDragPath(at: event.location)
+            }
         }
         return Unmanaged.passUnretained(event)
     }
