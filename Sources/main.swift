@@ -15,6 +15,10 @@ if let existing = duplicateInstances.first {
 }
 
 CrashLogging.install()
+let buildCommit = Bundle.main.object(forInfoDictionaryKey: "BentoBuildCommit") as? String ?? "unknown"
+let buildVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
+let buildTime = Bundle.main.object(forInfoDictionaryKey: "BentoBuildTime") as? String ?? "unknown"
+ErrorLog.logSync("Bento 启动：版本 \(buildVersion)，提交 \(buildCommit)，构建时间 \(buildTime)")
 
 // 未处理异常写日志，便于事后排查
 NSSetUncaughtExceptionHandler { exception in

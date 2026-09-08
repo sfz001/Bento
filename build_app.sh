@@ -226,6 +226,16 @@ cat > "$APP_BUNDLE/Contents/Info.plist" << 'PLIST_EOF'
 </plist>
 PLIST_EOF
 
+# 数字 bundle 版本供系统识别，单独记录提交号、脏状态和构建时间供排障。
+BUILD_NUMBER="$(git -C "$SCRIPT_DIR" rev-list --count HEAD 2>/dev/null || echo 1)"
+BUILD_COMMIT="$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+if [ -n "$(git -C "$SCRIPT_DIR" status --porcelain 2>/dev/null)" ]; then
+    BUILD_COMMIT="$BUILD_COMMIT-dirty"
+fi
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP_BUNDLE/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :BentoBuildCommit string $BUILD_COMMIT" "$APP_BUNDLE/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :BentoBuildTime string $(date -u +%Y-%m-%dT%H:%M:%SZ)" "$APP_BUNDLE/Contents/Info.plist"
+
 ensure_local_codesign_identity
 codesign \
     --force \
