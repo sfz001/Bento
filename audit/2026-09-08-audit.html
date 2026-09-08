@@ -180,7 +180,7 @@
     <a href="#open">待处理</a>
     <a href="#sound">判定稳妥的部分</a>
     <a href="#evidence">附录：证据</a>
-    <a href="#fixed">已修复 · 8 项</a>
+    <a href="#fixed">已修复 · 9 项</a>
   </nav>
 
   <main>
@@ -215,14 +215,13 @@
         <div class="tile" data-k="high"><div class="n">3</div><div class="l">高</div></div>
         <div class="tile" data-k="medium"><div class="n">9</div><div class="l">中</div></div>
         <div class="tile" data-k="low"><div class="n">16</div><div class="l">低 / 提示</div></div>
-        <div class="tile" data-k="done"><div class="n">8</div><div class="l">已完整修复</div></div>
-        <div class="tile" data-k="open"><div class="n">22</div><div class="l">待完成 · 含 2 项部分修复</div></div>
+        <div class="tile" data-k="done"><div class="n">9</div><div class="l">已完整修复</div></div>
+        <div class="tile" data-k="open"><div class="n">21</div><div class="l">待完成 · 含 2 项部分修复</div></div>
       </div>
       <div class="actions">
         <div class="eyebrow">待处理项里建议优先的三件</div>
         <ol>
           <li><b>补一个熄屏演练入口。</b>整条链路仍然只被真实会话验证过一次，而唯一的验证方式是让人远程连进来，或者让局域网扫一下 5900 端口，后者会直接黑屏加锁屏。菜单里加一项「模拟远程连接」才能让这条链路可被例行验证。见 <a href="#X-2">X-2</a>。</li>
-          <li><b>先压黑，再干重活。</b>现在连接时先做镜像与 Dock 调整，最后才压黑。这两步在真实硬件上要一到数秒，实测 02:56 那次从连接被接受到 Dock 重启用了约三秒，期间桌面对旁人完全可见。见 <a href="#R-4">R-4</a>。</li>
           <li><b>给甩动手势加位移校验。</b>浏览器标签页往上一拖分离成新窗口，轨迹正好满足上甩判定，源窗口会被莫名最大化。见 <a href="#T-2">T-2</a>。</li>
         </ol>
       </div>
@@ -252,13 +251,12 @@
 
     <section id="status">
       <h2>发现总览</h2>
-      <p class="prose" style="color:var(--muted)">共 30 项：8 项完整修复，2 项部分修复，20 项待处理。未完成项优先展示，已修复行置灰、划线并排在表格末尾。</p>
+      <p class="prose" style="color:var(--muted)">共 30 项：9 项完整修复，2 项部分修复，19 项待处理。未完成项优先展示，已修复行置灰、划线并排在表格末尾。</p>
       <div class="table-wrap">
         <table>
           <thead><tr><th>编号</th><th>严重度</th><th>状态</th><th>提交</th><th>问题</th></tr></thead>
           <tbody>
             <tr data-status="partial"><td class="nw"><a href="#X-7">X-7</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="partial">部分修复</span></td><td class="nw mono">3db76ad</td><td>文档与代码不符（CLAUDE.md 已更正，README 仍有漂移）</td></tr>
-            <tr><td class="nw"><a href="#R-4">R-4</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>先做镜像/分辨率/Dock 才压黑，重活期间桌面可见</td></tr>
             <tr><td class="nw"><a href="#R-5">R-5</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>施加与撤销顺序不是后进先出</td></tr>
             <tr><td class="nw"><a href="#R-6">R-6</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>分辨率快照的「不覆盖」规则不区分显示器</td></tr>
             <tr><td class="nw"><a href="#R-7">R-7</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>探测只看进程名，端口扫描即可触发熄屏与锁屏</td></tr>
@@ -267,7 +265,7 @@
             <tr data-status="partial"><td class="nw"><a href="#X-2">X-2</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="partial">部分修复</span></td><td class="nw mono">a9e6afb</td><td>已补镜像恢复测试，完整熄屏流程仍缺演练入口</td></tr>
             <tr><td class="nw"><a href="#X-8">X-8</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>熄屏本身不留日志痕迹，事后无法确认屏幕是否真的黑过</td></tr>
             <tr><td class="nw"><a href="#minor">其余 10 条</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>体验瑕疵与工程卫生，见「零散项」</td></tr>
-            <tr><td class="nw"><a href="#icons">I-1…I-3</a></td><td class="nw"><span class="chip" data-sev="info">提示</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>已停用的图标管理模块，重新启用前需处理</td></tr>
+            <tr><td class="nw"><a href="#icons">图标模块 3 项</a></td><td class="nw"><span class="chip" data-sev="info">提示</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>已停用的图标管理模块，重新启用前需处理</td></tr>
             <tr data-status="done"><td class="nw"><a href="#M-1">M-1</a></td><td class="nw"><span class="chip" data-sev="critical">严重</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">b17e1b2</td><td>硬件镜像组里 <code>CGDisplayMirrorsDisplay</code> 恒为 0，镜像永远拆不掉且快照被清</td></tr>
             <tr data-status="done"><td class="nw"><a href="#R-1">R-1</a></td><td class="nw"><span class="chip" data-sev="critical">严重</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">f480791</td><td>netstat 在 macOS 27 输出空表，屏幕共享探测永久失效且无 UI 提示</td></tr>
             <tr data-status="done"><td class="nw"><a href="#R-2">R-2</a></td><td class="nw"><span class="chip" data-sev="high">高</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">3db76ad</td><td>分辨率切换无门槛，会把外接主屏切走（实测已发生）</td></tr>
@@ -276,6 +274,7 @@
             <tr data-status="done"><td class="nw"><a href="#M-2">M-2</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">a9e6afb</td><td>镜像副屏被误判为睡眠，恢复被跳过；睡眠后缺重试</td></tr>
             <tr data-status="done"><td class="nw"><a href="#R-8">R-8</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">3db76ad</td><td>探测健康度只进日志不进界面</td></tr>
             <tr data-status="done"><td class="nw"><a href="#X-4">X-4</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">3db76ad</td><td>单实例守卫静默退出，新构建装上却起不来</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#R-4">R-4</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：R-4</td><td>先做镜像/分辨率/Dock 才压黑，重活期间桌面可见</td></tr>
           </tbody>
         </table>
       </div>
@@ -285,14 +284,6 @@
     <section id="open">
       <h2>待处理</h2>
 
-      <article class="finding" id="R-4" data-sev="medium">
-        <div class="head"><span class="chip" data-sev="medium">中</span><span class="id">R-4</span><h3>连接时先做重活才压黑，期间桌面可见</h3></div>
-        <div class="kv">
-          <div class="k">位置</div><div class="v loc">Sources/AppDelegate.swift，applyConnected</div>
-          <div class="k">问题</div><div class="v"><p>顺序是镜像、分辨率、Dock，最后才 <code>setBlack()</code>。这些是同步的显示重配置与五个子进程创建。实测 02:56 那次，从连接被接受到 Dock 重启用了约三秒，期间屏幕黑闪、重排，真实桌面对旁人可见。gamma 压黑本身是即时且廉价的。</p></div>
-          <div class="k">建议</div><div class="v"><p>先 <code>setBlack()</code> 再做重活。现有的屏幕参数观察者已经会在重配置完成后重压 gamma，顺序可以直接调换，不需要新机制。</p></div>
-        </div>
-      </article>
 
       <article class="finding" id="R-5" data-sev="medium">
         <div class="head"><span class="chip" data-sev="medium">中</span><span class="id">R-5</span><h3>施加与撤销顺序不是后进先出</h3></div>
@@ -399,7 +390,7 @@
 
       <h3 id="icons" style="padding-top:8px">图标管理模块（已停用）</h3>
       <div class="prose">
-        <p>该模块 1695 行，占代码约 29%，<code>featureEnabled</code> 为假，完全不运行。这是一个决定题：要么恢复，要么移到分支只留文档指针。保持现状的代价是每次审阅都要读一遍。重新启用前需处理三条：</p>
+        <p>该模块 1695 行，占代码约 29%，<code>featureEnabled</code> 为假，完全不运行。这是一个决定题：要么恢复，要么移到分支只留文档指针。保持现状的代价是每次审阅都要读一遍。重新启用前的待处理项如下：</p>
       </div>
       <div class="table-wrap">
         <table>
@@ -477,7 +468,7 @@ CGCompleteDisplayConfiguration: err 1014 (1 块)
     </section>
 
     <section id="fixed">
-      <h2>已修复 · 8 项</h2>
+      <h2>已修复 · 9 项</h2>
       <p class="prose" style="color:var(--muted)">以下条目已对照当前代码确认完成，移至报告底部归档。标题加删除线，正文与标签置灰；修复依据保留供追溯。部分修复项仍在待处理区。</p>
 
       <article class="finding" data-status="done" id="M-1" data-sev="critical">
@@ -553,6 +544,16 @@ CGCompleteDisplayConfiguration: err 1014 (1 块)
         </div>
       </article>
 
+
+      <article class="finding" data-status="done" id="R-4" data-sev="medium">
+        <div class="head"><span class="chip" data-st="done">已修复</span><span class="chip" data-sev="medium">中</span><span class="id">R-4</span><h3>连接时先做重活才压黑，期间桌面可见</h3></div>
+        <div class="kv">
+          <div class="k">位置</div><div class="v loc">Sources/AppDelegate.swift，applyConnected</div>
+          <div class="k">问题</div><div class="v"><p>顺序是镜像、分辨率、Dock，最后才 <code>setBlack()</code>。这些是同步的显示重配置与五个子进程创建。实测 02:56 那次，从连接被接受到 Dock 重启用了约三秒，期间屏幕黑闪、重排，真实桌面对旁人可见。gamma 压黑本身是即时且廉价的。</p></div>
+          <div class="k">建议</div><div class="v"><p>先 <code>setBlack()</code> 再做重活。现有的屏幕参数观察者已经会在重配置完成后重压 gamma，顺序可以直接调换，不需要新机制。</p></div>
+          <div class="k">本次修复</div><div class="v"><p>连接时先施加 gamma 黑屏，再执行镜像、分辨率和 Dock 调整；显示重配置后立即重压 gamma。类型检查通过，代码顺序核对完成。</p></div>
+        </div>
+      </article>
     </section>
 
     <footer>

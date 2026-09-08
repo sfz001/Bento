@@ -407,13 +407,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         pendingRestore = nil
         if !screenCtl.isScreenBlack {
             NSLog("[POLL] \(source) connection active — activating screen off")
+            // 先压黑；失败时仍记为本次会话，断开后可撤销部分成功的 gamma。
+            screenCtl.setBlack()
             if !sessionPrepared {
                 sessionPrepared = true
                 screenCtl.enableMirroring()
                 screenCtl.switchResolution()
                 screenCtl.saveDockAndSetLeft()
             }
-            screenCtl.setBlack()
+            // 显示重配置可能重置 gamma，完成后立即补压。
+            screenCtl.reassertBlackIfNeeded()
             updateStatus()
         }
         lastPolledConnected = true
