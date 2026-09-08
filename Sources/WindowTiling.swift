@@ -1464,9 +1464,7 @@ class TilingController: NSObject {
     // MARK: AX 负缓存
 
     private func negCacheKey(_ p: CGPoint) -> String {
-        // 合成事件可以带 NaN/inf 坐标，Int(非有限 Double) 直接 trap
-        guard p.x.isFinite, p.y.isFinite else { return "nonfinite" }
-        return "\(Int(p.x / 8)):\(Int(p.y / 8))" // 8px 网格量化，避免轻微移动击穿缓存
+        TilingGeometry.negativeCacheKey(p)
     }
 
     private func isAxNegativeCached(_ p: CGPoint) -> Bool {
