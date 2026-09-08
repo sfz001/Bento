@@ -148,6 +148,11 @@ ensure_local_codesign_identity() {
     ensure_codesign_keychain_visible
 }
 
+# --test：仅替代接口与独立子进程回归，不更改真实显示器/权限/系统设置。
+if [ "${1:-}" = "--test" ]; then
+    exec "$SCRIPT_DIR/Tests/run_all_tests.sh"
+fi
+
 # --check：秒级类型检查，不编译产物、不打包（改代码时的快速反馈）
 if [ "${1:-}" = "--check" ]; then
     echo "Type-checking (arm64)..."

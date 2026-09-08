@@ -45,6 +45,13 @@ func runProcess(_ path: String, _ args: [String], captureOutput: Bool = false,
 /// 未处理异常与关键错误写入 ~/Library/Application Support/Bento/error.log
 enum ErrorLog {
     static let directory: URL = {
+        #if BENTO_TESTS
+        if let path = ProcessInfo.processInfo.environment["BENTO_TEST_LOG_DIR"] {
+            let dir = URL(fileURLWithPath: path, isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            return dir
+        }
+        #endif
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let dir = base.appendingPathComponent("Bento", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

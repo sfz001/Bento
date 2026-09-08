@@ -180,7 +180,7 @@
     <a href="#open">待处理</a>
     <a href="#sound">判定稳妥的部分</a>
     <a href="#evidence">附录：证据</a>
-    <a href="#fixed">已修复 · 28 项</a>
+    <a href="#fixed">已修复 · 29 项</a>
   </nav>
 
   <main>
@@ -215,13 +215,12 @@
         <div class="tile" data-k="high"><div class="n">3</div><div class="l">高</div></div>
         <div class="tile" data-k="medium"><div class="n">9</div><div class="l">中</div></div>
         <div class="tile" data-k="low"><div class="n">16</div><div class="l">低 / 提示</div></div>
-        <div class="tile" data-k="done"><div class="n">28</div><div class="l">已完整修复</div></div>
-        <div class="tile" data-k="open"><div class="n">2</div><div class="l">待完成 · 含 2 项部分修复</div></div>
+        <div class="tile" data-k="done"><div class="n">29</div><div class="l">已完整修复</div></div>
+        <div class="tile" data-k="open"><div class="n">1</div><div class="l">待完成 · 含 1 项部分修复</div></div>
       </div>
       <div class="actions">
         <div class="eyebrow">待处理项里建议优先的三件</div>
         <ol>
-          <li><b>补一个熄屏演练入口。</b>整条链路仍然只被真实会话验证过一次，而唯一的验证方式是让人远程连进来，或者让局域网扫一下 5900 端口，后者会直接黑屏加锁屏。菜单里加一项「模拟远程连接」才能让这条链路可被例行验证。见 <a href="#X-2">X-2</a>。</li>
         </ol>
       </div>
     </section>
@@ -250,13 +249,12 @@
 
     <section id="status">
       <h2>发现总览</h2>
-      <p class="prose" style="color:var(--muted)">共 30 项：28 项完整修复，2 项部分修复，0 项待处理。未完成项优先展示，已修复行置灰、划线并排在表格末尾。</p>
+      <p class="prose" style="color:var(--muted)">共 30 项：29 项完整修复，1 项部分修复，0 项待处理。未完成项优先展示，已修复行置灰、划线并排在表格末尾。</p>
       <div class="table-wrap">
         <table>
           <thead><tr><th>编号</th><th>严重度</th><th>状态</th><th>提交</th><th>问题</th></tr></thead>
           <tbody>
             <tr data-status="partial"><td class="nw"><a href="#X-7">X-7</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="partial">部分修复</span></td><td class="nw mono">3db76ad</td><td>文档与代码不符（CLAUDE.md 已更正，README 仍有漂移）</td></tr>
-            <tr data-status="partial"><td class="nw"><a href="#X-2">X-2</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="partial">部分修复</span></td><td class="nw mono">a9e6afb</td><td>已补镜像恢复测试，完整熄屏流程仍缺演练入口</td></tr>
             <tr data-status="done"><td class="nw"><a href="#M-1">M-1</a></td><td class="nw"><span class="chip" data-sev="critical">严重</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">b17e1b2</td><td>硬件镜像组里 <code>CGDisplayMirrorsDisplay</code> 恒为 0，镜像永远拆不掉且快照被清</td></tr>
             <tr data-status="done"><td class="nw"><a href="#R-1">R-1</a></td><td class="nw"><span class="chip" data-sev="critical">严重</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">f480791</td><td>netstat 在 macOS 27 输出空表，屏幕共享探测永久失效且无 UI 提示</td></tr>
             <tr data-status="done"><td class="nw"><a href="#R-2">R-2</a></td><td class="nw"><span class="chip" data-sev="high">高</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">3db76ad</td><td>分辨率切换无门槛，会把外接主屏切走（实测已发生）</td></tr>
@@ -285,6 +283,7 @@
             <tr data-status="done"><td class="nw"><a href="#I-1">I-1</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：I-1</td><td>删除 chevron 点击前无条件投递的全局 ESC，避免取消前台对话框和输入法候选；菜单拦截点击时交由现有结果校验及有限重试处理</td></tr>
             <tr data-status="done"><td class="nw"><a href="#I-2">I-2</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：I-2</td><td>系统模块名称同时按中英文逗号截断并去掉首尾空白，空名称回退到模块名；启用后的刷新还会清理旧 module 缓存，第三方应用名称不受影响</td></tr>
             <tr data-status="done"><td class="nw"><a href="#I-3">I-3</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：I-3</td><td>溢出条改为无按钮、收起、展开、不可读四态</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#X-2">X-2</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：X-2</td><td>已补镜像恢复测试，完整熄屏流程仍缺演练入口</td></tr>
           </tbody>
         </table>
       </div>
@@ -300,17 +299,6 @@
 
 
 
-      <article class="finding" id="X-2" data-status="partial" data-sev="medium">
-        <div class="head"><span class="chip" data-sev="medium">中</span><span class="chip" data-st="partial">部分修复 a9e6afb</span><span class="id">X-2</span><h3>已有镜像回归测试，完整熄屏流程仍缺演练入口</h3></div>
-        <div class="kv">
-          <div class="k">已补充</div><div class="v"><p><code>a9e6afb</code> 新增 9 项镜像恢复模拟回归测试，直接编译当前 <code>ScreenController.swift</code> 并替换显示器接口，不改变真实显示器布局。原先「零自动化测试」的描述已不适用。</p></div>
-          <div class="k">仍待处理</div><div class="v"><p>大量逻辑不依赖 UI，本可直接单测：布局树的操作与容错解码、两个甩动判定、探测三态到状态机的流转、快照的不覆盖规则。而整条熄屏链路至今只被真实会话验证过一次，唯一的验证方式是让人远程连进来，或让局域网扫一下 5900 端口，后者会直接黑屏加锁屏。</p></div>
-          <div class="k">建议</div><div class="v"><ul>
-            <li>菜单加一项「模拟远程连接」，走完整的镜像、Dock、压黑、锁定确认、恢复流程，不依赖真实连接。</li>
-            <li>把纯逻辑抽到不引用 AppKit 的文件，加一个 <code>./build_app.sh --test</code>。</li>
-          </ul></div>
-        </div>
-      </article>
 
       <article class="finding" id="X-7" data-status="partial" data-sev="low">
         <div class="head"><span class="chip" data-sev="low">低</span><span class="chip" data-st="partial">部分修复</span><span class="id">X-7</span><h3>文档与代码不符</h3></div>
@@ -414,7 +402,7 @@ CGCompleteDisplayConfiguration: err 1014 (1 块)
     </section>
 
     <section id="fixed">
-      <h2>已修复 · 28 项</h2>
+      <h2>已修复 · 29 项</h2>
       <p class="prose" style="color:var(--muted)">以下条目已对照当前代码确认完成，移至报告底部归档。标题加删除线，正文与标签置灰；修复依据保留供追溯。部分修复项仍在待处理区。</p>
 
       <article class="finding" data-status="done" id="M-1" data-sev="critical">
@@ -640,6 +628,19 @@ CGCompleteDisplayConfiguration: err 1014 (1 块)
         <div class="head"><span class="chip" data-st="done">已修复</span><span class="id">I-3</span><h3>溢出条改为无按钮、收起、展开、不可读四态</h3></div>
         <div class="kv"><div class="k">原问题</div><div class="v">没有隐藏项时「溢出条是否展开」返回真，导致顺序采纳与真实布局校验被永久跳过，清单顺序会与真实菜单栏脱节。应把「无按钮」与「已展开」分成两个返回值。</div>
           <div class="k">本次修复</div><div class="v">溢出条改为无按钮、收起、展开、不可读四态。无隐藏项时正常采纳顺序并校验布局；AX 空树时停止校验与拖动，避免把睡眠误判为无需展开。四态回归和类型检查通过，模块保持停用。</div></div>
+      </article>
+
+      <article class="finding" data-status="done" id="X-2" data-sev="medium">
+        <div class="head"><span class="chip" data-st="done">已修复</span><span class="chip" data-sev="medium">中</span><span class="id">X-2</span><h3>已有镜像回归测试，完整熄屏流程仍缺演练入口</h3></div>
+        <div class="kv">
+          <div class="k">已补充</div><div class="v"><p><code>a9e6afb</code> 新增 9 项镜像恢复模拟回归测试，直接编译当前 <code>ScreenController.swift</code> 并替换显示器接口，不改变真实显示器布局。原先「零自动化测试」的描述已不适用。</p></div>
+          <div class="k">仍待处理</div><div class="v"><p>大量逻辑不依赖 UI，本可直接单测：布局树的操作与容错解码、两个甩动判定、探测三态到状态机的流转、快照的不覆盖规则。而整条熄屏链路至今只被真实会话验证过一次，唯一的验证方式是让人远程连进来，或让局域网扫一下 5900 端口，后者会直接黑屏加锁屏。</p></div>
+          <div class="k">建议</div><div class="v"><ul>
+            <li>菜单加一项「模拟远程连接」，走完整的镜像、Dock、压黑、锁定确认、恢复流程，不依赖真实连接。</li>
+            <li>把纯逻辑抽到不引用 AppKit 的文件，加一个 <code>./build_app.sh --test</code>。</li>
+          </ul></div>
+          <div class="k">本次修复</div><div class="v"><p>新增 ./build_app.sh --test，8 组回归覆盖实际 AppDelegate 会话流、镜像恢复、认证探测、布局模型、手势、日志、图标语义与致命信号。菜单新增需主动确认的 10 秒熄屏演练，真实连接可接管；修复锁定等待重入和重连状态保留边界。完整模拟测试集通过，实际黑屏演练未在用户屏幕上自动执行。</p></div>
+        </div>
       </article>
     </section>
 

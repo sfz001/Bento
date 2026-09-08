@@ -10,8 +10,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusMenu: NSMenu!
     private var statusMenuItem: NSMenuItem!
 
-    private let screenCtl = ScreenController()
-    private let scrollReverser = ScrollReverser()
+    private let screenCtl: ScreenController
+    private let lockCheck: () -> Bool
+    private let lockWaitBudget: TimeInterval
+    private lazy var scrollReverser = ScrollReverser()
     private var remoteMonitorEnabled = UserDefaults.standard.object(forKey: "RemoteMonitorEnabled") as? Bool ?? true
     private var scrollPermissionItem: NSMenuItem!
     private var openAccessibilityItem: NSMenuItem!
@@ -20,7 +22,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var reverseMouseItem: NSMenuItem!
     private var reverseTrackpadItem: NSMenuItem!
     // 分屏
-    private let tiling = TilingController()
+    private lazy var tiling = TilingController()
     // 远程熄屏监控开关（默认开）
     private var remoteMonitorItem: NSMenuItem!
     private var tilingMasterItem: NSMenuItem!
@@ -28,9 +30,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var tilingPermissionMissing = false
     private var autoLaunchItem: NSMenuItem!
     // 菜单栏图标管理
-    private let iconMgr = MenuBarIconManager()
+    private lazy var iconMgr = MenuBarIconManager()
     // 防止睡眠
-    private let sleepGuard = SleepGuard()
+    private lazy var sleepGuard = SleepGuard()
     private var permanentSleepItem: NSMenuItem!
     private var timedSleepItem: NSMenuItem!
     private var timedSleepSubmenu: NSMenu?
@@ -44,6 +46,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var launchAgentPath: String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         return "\(home)/Library/LaunchAgents/\(launchAgentLabel).plist"
+    }
+
+    init(screenController: ScreenController = ScreenController(),
+         lockCheck: @escaping () -> Bool = ScreenController.isScreenLocked,
+         lockWaitBudget: TimeInterval = 6) {
+        self.screenCtl = screenController
+        self.lockCheck = lockCheck
+        self.lockWaitBudget = lockWaitBudget
+        super.init()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -82,6 +93,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         stopPollTimer()
+        cancelRehearsal()
         iconMgr.stop()
         tiling.stop()
         scrollReverser.stop()
@@ -125,6 +137,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 熄屏模块的手动兜底：把镜像强制拆回扩展桌面（自动恢复失灵时用）
         statusMenu.addItem(makeItem("恢复扩展显示器", symbol: "display.2", action: #selector(restoreExtendedDisplays)))
+
+        statusMenu.addItem(makeItem("熄屏流程演练…", symbol: "play.circle", action: #selector(rehearseScreenOff)))
 
         // 远程场景配件：认证重启，跳过 FileVault 开机解锁界面，重启后远程还能连回来
         statusMenu.addItem(makeItem("FileVault 免密重启", symbol: "lock.rotation", action: #selector(authRestart)))
@@ -371,6 +385,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func applyConnected(_ source: String) {
         guard remoteMonitorEnabled else { return }
+        // 真实远程连接接管演练，取消演练的自动收尾，保持隐私黑屏。
+        if source != "演练" { cancelRehearsal() }
         disconnectStreak = 0
         loggedUnknownProbe = false
         activeSource = source
@@ -401,7 +417,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// 要求它也「确定断开」等于 RustDesk 会话结束后黑屏永不恢复。
     /// 它既然从来探不到连接，也不可能是这次会话的激活来源
     private func applyNotConnected(rustdesk: ConnectionProbe, screenSharing: ConnectionProbe) {
-        guard remoteMonitorEnabled else { return }
+        guard remoteMonitorEnabled, !rehearsalActive, pendingRestore == nil else { return }
         if screenCtl.isScreenBlack || sessionPrepared {
             let sourceProbe = activeSource == "Screen Sharing" ? screenSharing : rustdesk
             if case .disconnected = sourceProbe {
@@ -434,7 +450,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// 期间若重新连上，pendingRestore 会被取消、代际作废，黑幕原样保留
     private func confirmedDisconnect() {
         disconnectStreak = 0
-        sessionPrepared = false
         activeSource = nil
         NSLog("[POLL] No active connection — locking, then restoring screen")
         screenCtl.lockScreen()
@@ -450,7 +465,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // 另收 loginwindow 上锁时发的 com.apple.screenIsLocked 分布式通知作第二路信号；
     // 确认上锁后再留 0.3s 让屏保画面落定才撤黑。超过预算仍未上锁：记日志 + 状态栏标记，
     // 然后照旧撤黑——一直黑着的话本地用户回来连菜单都看不见，比裸露更糟
-    private let lockWaitBudget: TimeInterval = 6
     /// 最近一次收到 com.apple.screenIsLocked 的时刻；只信本次锁屏请求之后到达的
     private var lastLockNotificationAt: Date?
     /// 上次断开后未能确认锁定：进状态行，直到下一次确认成功或用户重新开启监控
@@ -459,7 +473,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func pollLockThenRestore(generation gen: Int, startedAt: Date) {
         guard gen == restoreGeneration else { return }
         let notified = (lastLockNotificationAt ?? .distantPast) >= startedAt.addingTimeInterval(-1)
-        let locked = notified || ScreenController.isScreenLocked()
+        let locked = notified || lockCheck()
         let waited = Date().timeIntervalSince(startedAt)
         if locked {
             if lockWarning != nil {
@@ -487,6 +501,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let work = DispatchWorkItem { [weak self] in
             guard let self, gen == self.restoreGeneration else { return }
             self.pendingRestore = nil
+            self.sessionPrepared = false
             self.screenCtl.restoreDock()
             self.screenCtl.restoreDisplaySettings()
             self.screenCtl.restore()
@@ -516,6 +531,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateStatus() {
+        guard statusItem != nil, statusMenuItem != nil else { return }
         if tilingPermissionMissing {
             // 未授予辅助功能权限时，菜单栏图标给出明确状态
             statusMenuItem.title = "需要辅助功能权限"
@@ -538,11 +554,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let lockWarning { warnings.append(lockWarning) }
         let suffix = warnings.isEmpty ? "" : " · " + warnings.joined(separator: " · ")
         if screenCtl.isScreenBlack {
-            statusMenuItem.title = "远程已连接 · 已熄屏" + suffix
+            let activity = rehearsalActive ? "演练中 · 10 秒后自动锁屏恢复" : "远程已连接 · 已熄屏"
+            statusMenuItem.title = activity + suffix
             statusMenuItem.image = NSImage(systemSymbolName: "eye.slash.fill", accessibilityDescription: nil)
             // 熄屏态只换图标不加文字：菜单栏空间是稀缺资源（尤其拥挤栏），语义放 tooltip
             setStatusSymbol("eye.slash.fill", description: "Bento 已熄屏")
-            statusItem.button?.toolTip = "远程已连接 · 已熄屏" + suffix
+            statusItem.button?.toolTip = activity + suffix
         } else {
             statusMenuItem.title = "监控中" + suffix
             statusMenuItem.image = NSImage(systemSymbolName: warnings.isEmpty ? "checkmark.circle" : "exclamationmark.triangle",
@@ -678,11 +695,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleRemoteMonitor() {
         remoteMonitorEnabled.toggle()
         UserDefaults.standard.set(remoteMonitorEnabled, forKey: "RemoteMonitorEnabled")
-        remoteMonitorItem.state = remoteMonitorEnabled ? .on : .off
+        remoteMonitorItem?.state = remoteMonitorEnabled ? .on : .off
         if remoteMonitorEnabled {
             lockWarning = nil // 用户重新开启 = 重新给一次机会，旧警告不再挂着
             startPollTimer()
         } else {
+            cancelRehearsal()
             stopPollTimer()
             restoreGeneration += 1
             pendingRestore?.cancel()
@@ -715,6 +733,50 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func retryScrollPermissions() {
         startScrollReverser(showAlert: false)
+    }
+
+    private var rehearsalActive = false
+    private var rehearsalEnd: DispatchWorkItem?
+
+    private func cancelRehearsal() {
+        rehearsalEnd?.cancel()
+        rehearsalEnd = nil
+        rehearsalActive = false
+    }
+
+    @objc private func rehearseScreenOff() {
+        let alert = NSAlert()
+        guard remoteMonitorEnabled, !sessionPrepared, !screenCtl.isScreenBlack, pendingRestore == nil else {
+            alert.messageText = "当前无法开始演练"
+            alert.informativeText = "请开启远程熄屏监控，并等待当前远程会话或恢复流程结束后再试。"
+            alert.addButton(withTitle: "好")
+            alert.runModal()
+            return
+        }
+        alert.messageText = "演练远程熄屏流程"
+        alert.informativeText = "屏幕将变黑并调整显示器与 Dock，10 秒后自动锁屏并恢复。请先保存工作；解锁后即可检查恢复结果。期间真实远程连接会接管演练，保持熄屏。"
+        alert.addButton(withTitle: "开始演练")
+        alert.addButton(withTitle: "取消")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        _ = beginRehearsal()
+    }
+
+    @discardableResult
+    private func beginRehearsal(duration: TimeInterval = 10) -> Bool {
+        // 对话框期间状态可能改变，真正执行前再检查一次。
+        guard remoteMonitorEnabled, !rehearsalActive, !sessionPrepared,
+              !screenCtl.isScreenBlack, pendingRestore == nil else { return false }
+        rehearsalActive = true
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.rehearsalActive else { return }
+            self.cancelRehearsal()
+            self.confirmedDisconnect()
+        }
+        // 先安排恢复，再施加变更；走真实连接与锁定确认的同一套代码。
+        rehearsalEnd = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: work)
+        applyConnected("演练")
+        return true
     }
 
     @objc private func restoreExtendedDisplays() {
@@ -848,3 +910,18 @@ extension AppDelegate: NSMenuDelegate {
         iconMgr.setStatusMenuOpen(false)
     }
 }
+
+#if BENTO_TESTS
+// 仅测试构建暴露驱动入口，测试不安装菜单、event tap 或修改真实显示器。
+extension AppDelegate {
+    func testConnect(_ source: String = "Screen Sharing") { applyConnected(source) }
+    func testDisconnect(rustdesk: ConnectionProbe = .unknown, screenSharing: ConnectionProbe = .disconnected) {
+        applyNotConnected(rustdesk: rustdesk, screenSharing: screenSharing)
+    }
+    func testSetMonitoring(_ enabled: Bool) { remoteMonitorEnabled = enabled }
+    func testDisableMonitoring() { if remoteMonitorEnabled { toggleRemoteMonitor() } }
+    func testRehearse(duration: TimeInterval) -> Bool { beginRehearsal(duration: duration) }
+    var testSessionPrepared: Bool { sessionPrepared }
+    var testHasLockWarning: Bool { lockWarning != nil }
+}
+#endif

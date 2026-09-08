@@ -14,6 +14,15 @@ struct TilingGeometryTests {
         precondition(TilingGeometry.negativeCacheKey(CGPoint(x: CGFloat.greatestFiniteMagnitude, y: -CGFloat.greatestFiniteMagnitude)) == "1000000000:-1000000000")
         precondition(TilingGeometry.negativeCacheKey(CGPoint(x: CGFloat.infinity, y: 0)) == "nonfinite")
         precondition(TilingGeometry.negativeCacheKey(CGPoint(x: CGFloat.nan, y: 0)) == "nonfinite")
+        let start = Date(timeIntervalSince1970: 0)
+        func points(_ values: [CGPoint]) -> [(p: CGPoint, t: Date)] {
+            values.enumerated().map { ($0.element, start.addingTimeInterval(Double($0.offset) * 0.1)) }
+        }
+        precondition(TilingGeometry.isUpwardFlick(points([CGPoint(x: 0, y: 100), CGPoint(x: 0, y: 70), CGPoint(x: 0, y: 30)])))
+        precondition(!TilingGeometry.isUpwardFlick(points([CGPoint(x: 0, y: 0), CGPoint(x: 0, y: 70)])))
+        precondition(!TilingGeometry.isUpwardFlick([]))
+        precondition(TilingGeometry.isWiggle(points([.zero, CGPoint(x: 30, y: 0), .zero, CGPoint(x: 30, y: 0)])))
+        precondition(!TilingGeometry.isWiggle(points([.zero, CGPoint(x: 3, y: 0), .zero, CGPoint(x: 3, y: 0)])))
         print("PASS: window displacement vs tab drag, micro-movement, missing window and return-to-origin")
     }
 }
