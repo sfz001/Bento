@@ -620,11 +620,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Bento Needs Scroll Permissions"
-        alert.informativeText = "Scroll direction control needs Accessibility and Input Monitoring. Enable Bento in System Settings, then click Retry Scroll Permissions or relaunch Bento."
-        alert.addButton(withTitle: "Open Accessibility")
-        alert.addButton(withTitle: "Open Input Monitoring")
-        alert.addButton(withTitle: "Later")
+        alert.messageText = "Bento 需要滚动控制权限"
+        alert.informativeText = "请在「系统设置 → 隐私与安全性」中为 Bento 开启「辅助功能」和「输入监控」，然后点击菜单中的「重新检测滚动权限」，无需退出重开。"
+        alert.addButton(withTitle: "打开辅助功能设置")
+        alert.addButton(withTitle: "打开输入监控设置")
+        alert.addButton(withTitle: "稍后")
 
         switch alert.runModal() {
         case .alertFirstButtonReturn:

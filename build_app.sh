@@ -221,7 +221,7 @@ cat > "$APP_BUNDLE/Contents/Info.plist" << 'PLIST_EOF'
     <key>LSUIElement</key>
     <true/>
     <key>NSInputMonitoringUsageDescription</key>
-    <string>Bento needs input monitoring to distinguish trackpad gestures from mouse wheel scrolling.</string>
+    <string>Bento 需要输入监控权限，以区分触控板手势与鼠标滚轮，并独立控制滚动方向。</string>
 </dict>
 </plist>
 PLIST_EOF
