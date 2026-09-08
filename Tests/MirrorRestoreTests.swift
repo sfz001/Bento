@@ -143,7 +143,17 @@ struct MirrorRestoreTests {
         ScreenController().restoreResolution()
         precondition(UserDefaults.standard.data(forKey: resolutionKey) == resolution,
                      "Mirrored display must retain original resolution snapshot")
+        let owner = ScreenController()
+        precondition(owner.canChangeResolution(on: 1))
+        precondition(!owner.canChangeResolution(on: 2))
+        precondition(UserDefaults.standard.data(forKey: resolutionKey) == resolution)
+        let legacy = Data("{\"width\":1704,\"height\":959,\"pixelWidth\":3408,\"pixelHeight\":1918,\"refreshRate\":60}".utf8)
+        UserDefaults.standard.set(legacy, forKey: resolutionKey)
+        precondition(!owner.canChangeResolution(on: 1))
+        UserDefaults.standard.set(Data("bad".utf8), forKey: resolutionKey)
+        precondition(!owner.canChangeResolution(on: 1))
+        precondition(owner.canChangeResolution(on: 1))
         UserDefaults.standard.removeObject(forKey: resolutionKey)
-        print("PASS: 11 mirror/display restore regression scenarios")
+        print("PASS: display restore and resolution snapshot ownership regressions")
     }
 }

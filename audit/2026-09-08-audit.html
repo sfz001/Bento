@@ -180,7 +180,7 @@
     <a href="#open">待处理</a>
     <a href="#sound">判定稳妥的部分</a>
     <a href="#evidence">附录：证据</a>
-    <a href="#fixed">已修复 · 10 项</a>
+    <a href="#fixed">已修复 · 11 项</a>
   </nav>
 
   <main>
@@ -215,8 +215,8 @@
         <div class="tile" data-k="high"><div class="n">3</div><div class="l">高</div></div>
         <div class="tile" data-k="medium"><div class="n">9</div><div class="l">中</div></div>
         <div class="tile" data-k="low"><div class="n">16</div><div class="l">低 / 提示</div></div>
-        <div class="tile" data-k="done"><div class="n">10</div><div class="l">已完整修复</div></div>
-        <div class="tile" data-k="open"><div class="n">20</div><div class="l">待完成 · 含 2 项部分修复</div></div>
+        <div class="tile" data-k="done"><div class="n">11</div><div class="l">已完整修复</div></div>
+        <div class="tile" data-k="open"><div class="n">19</div><div class="l">待完成 · 含 2 项部分修复</div></div>
       </div>
       <div class="actions">
         <div class="eyebrow">待处理项里建议优先的三件</div>
@@ -251,13 +251,12 @@
 
     <section id="status">
       <h2>发现总览</h2>
-      <p class="prose" style="color:var(--muted)">共 30 项：10 项完整修复，2 项部分修复，18 项待处理。未完成项优先展示，已修复行置灰、划线并排在表格末尾。</p>
+      <p class="prose" style="color:var(--muted)">共 30 项：11 项完整修复，2 项部分修复，17 项待处理。未完成项优先展示，已修复行置灰、划线并排在表格末尾。</p>
       <div class="table-wrap">
         <table>
           <thead><tr><th>编号</th><th>严重度</th><th>状态</th><th>提交</th><th>问题</th></tr></thead>
           <tbody>
             <tr data-status="partial"><td class="nw"><a href="#X-7">X-7</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="partial">部分修复</span></td><td class="nw mono">3db76ad</td><td>文档与代码不符（CLAUDE.md 已更正，README 仍有漂移）</td></tr>
-            <tr><td class="nw"><a href="#R-6">R-6</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>分辨率快照的「不覆盖」规则不区分显示器</td></tr>
             <tr><td class="nw"><a href="#R-7">R-7</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>探测只看进程名，端口扫描即可触发熄屏与锁屏</td></tr>
             <tr><td class="nw"><a href="#T-2">T-2</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>甩动手势按几何判定，浏览器标签页拖拽会误触发最大化</td></tr>
             <tr><td class="nw"><a href="#X-1">X-1</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>Swift 运行时 trap 不进 error.log</td></tr>
@@ -275,6 +274,7 @@
             <tr data-status="done"><td class="nw"><a href="#X-4">X-4</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">3db76ad</td><td>单实例守卫静默退出，新构建装上却起不来</td></tr>
             <tr data-status="done"><td class="nw"><a href="#R-4">R-4</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：R-4</td><td>先做镜像/分辨率/Dock 才压黑，重活期间桌面可见</td></tr>
             <tr data-status="done"><td class="nw"><a href="#R-5">R-5</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：R-5</td><td>施加与撤销顺序不是后进先出</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#R-6">R-6</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：R-6</td><td>分辨率快照的「不覆盖」规则不区分显示器</td></tr>
           </tbody>
         </table>
       </div>
@@ -286,14 +286,6 @@
 
 
 
-      <article class="finding" id="R-6" data-sev="medium">
-        <div class="head"><span class="chip" data-sev="medium">中</span><span class="id">R-6</span><h3>分辨率快照的「不覆盖」规则不区分显示器</h3></div>
-        <div class="kv">
-          <div class="k">问题</div><div class="v"><p><code>hasResolutionSnapshot()</code> 只看键是否存在。若某次会话在外接屏为主屏时崩溃，快照属于外接屏；拔掉该屏后再来一次会话，代码不再为新主屏保存快照，却照样切换它，而恢复找的是离线的外接屏。新主屏的原始分辨率从此没有任何记录。</p></div>
-          <div class="k">现状</div><div class="v"><p>内置屏门槛（R-2）让快照只可能属于内置屏，这条在当前代码下已很难触发，但规则本身仍不正确。</p></div>
-          <div class="k">建议</div><div class="v"><p>比对快照里的 UUID 与本次目标显示器，属于别的显示器时拒绝切换本屏。</p></div>
-        </div>
-      </article>
 
       <article class="finding" id="R-7" data-sev="medium">
         <div class="head"><span class="chip" data-sev="medium">中</span><span class="id">R-7</span><h3>探测只看进程名，端口扫描即可触发熄屏与锁屏</h3></div>
@@ -457,7 +449,7 @@ CGCompleteDisplayConfiguration: err 1014 (1 块)
     </section>
 
     <section id="fixed">
-      <h2>已修复 · 10 项</h2>
+      <h2>已修复 · 11 项</h2>
       <p class="prose" style="color:var(--muted)">以下条目已对照当前代码确认完成，移至报告底部归档。标题加删除线，正文与标签置灰；修复依据保留供追溯。部分修复项仍在待处理区。</p>
 
       <article class="finding" data-status="done" id="M-1" data-sev="critical">
@@ -554,6 +546,16 @@ CGCompleteDisplayConfiguration: err 1014 (1 块)
           </ul><p>本机两块显示器型号相同，镜像不改变模式列表，当前不会触发；接不同型号显示器时会。</p></div>
           <div class="k">建议</div><div class="v"><p>施加顺序改为快照分辨率、镜像、分辨率、Dock；撤销严格反序。显示器在镜像组里时不要以「模式不在列表」为由丢弃快照，只推迟。崩溃恢复里一并解除镜像。</p></div>
           <div class="k">本次修复</div><div class="v"><p>镜像前保存原始分辨率；恢复先拆镜像再恢复分辨率，最后撤黑。启动时一并恢复镜像；镜像、睡眠或模式列表读取失败时保留分辨率快照，空闲轮询重试。类型检查与 11 项显示恢复回归通过。</p></div>
+        </div>
+      </article>
+
+      <article class="finding" data-status="done" id="R-6" data-sev="medium">
+        <div class="head"><span class="chip" data-st="done">已修复</span><span class="chip" data-sev="medium">中</span><span class="id">R-6</span><h3>分辨率快照的「不覆盖」规则不区分显示器</h3></div>
+        <div class="kv">
+          <div class="k">问题</div><div class="v"><p><code>hasResolutionSnapshot()</code> 只看键是否存在。若某次会话在外接屏为主屏时崩溃，快照属于外接屏；拔掉该屏后再来一次会话，代码不再为新主屏保存快照，却照样切换它，而恢复找的是离线的外接屏。新主屏的原始分辨率从此没有任何记录。</p></div>
+          <div class="k">现状</div><div class="v"><p>内置屏门槛（R-2）让快照只可能属于内置屏，这条在当前代码下已很难触发，但规则本身仍不正确。</p></div>
+          <div class="k">建议</div><div class="v"><p>比对快照里的 UUID 与本次目标显示器，属于别的显示器时拒绝切换本屏。</p></div>
+          <div class="k">本次修复</div><div class="v"><p>切换前比对快照 UUID。属于其他显示器、无 UUID 的旧快照或损坏快照均不允许本次切换；读取不到当前模式也不改动。新增相同屏、不同屏、旧格式、损坏和无快照回归，全部通过。</p></div>
         </div>
       </article>
     </section>

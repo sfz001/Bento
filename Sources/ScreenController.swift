@@ -364,6 +364,21 @@ class ScreenController {
         [kCGDisplayShowDuplicateLowResolutionModes: kCFBooleanTrue] as CFDictionary
     }
 
+    /// 不允许用另一块屏（或未知归属）的旧快照覆盖本次切换的恢复依据。
+    func canChangeResolution(on display: CGDirectDisplayID) -> Bool {
+        guard let data = UserDefaults.standard.data(forKey: resolutionSnapshotDefaultsKey) else { return true }
+        guard let snapshot = try? JSONDecoder().decode(DisplayModeSnapshot.self, from: data) else {
+            ErrorLog.log("分辨率快照损坏，清除并跳过本次切换")
+            clearResolutionSnapshot()
+            return false
+        }
+        guard snapshot.displayUUID == DisplayKeys.uuid(for: display) else {
+            ErrorLog.log("分辨率: 旧快照属于其他或未知显示器，本次不切换，保留原快照")
+            return false
+        }
+        return true
+    }
+
     func switchResolution() {
         let main = CGMainDisplayID()
         // 1512×982 HiDPI 是 14" MacBook Pro 内置屏的模式，只对内置屏执行。外接屏的模式表里
@@ -374,7 +389,7 @@ class ScreenController {
             NSLog("Resolution switch skipped: main display \(main) is not built-in")
             return
         }
-        let currentMode = CGDisplayCopyDisplayMode(main)
+        guard canChangeResolution(on: main), let currentMode = CGDisplayCopyDisplayMode(main) else { return }
 
         guard let modes = CGDisplayCopyAllDisplayModes(main, displayModeOptions) as? [CGDisplayMode] else { return }
 
@@ -392,7 +407,7 @@ class ScreenController {
         // 先落盘再切换（与镜像/Dock 同序）：反过来的话，切换成功到 cfprefsd 落盘
         // 之间被 SIGKILL，分辨率就永久固化且盘上无任何可恢复依据——快照要防的
         // 正是这种场景，自己不能留同款窗口
-        if !hadSnapshot, let currentMode {
+        if !hadSnapshot {
             saveResolutionSnapshot(currentMode, display: main)
         }
 
