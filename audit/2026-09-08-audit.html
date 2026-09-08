@@ -97,7 +97,7 @@
   .score .tile[data-k="high"] .n { color: var(--sev-high); }
   .score .tile[data-k="medium"] .n { color: var(--sev-medium); }
   .score .tile[data-k="low"] .n { color: var(--sev-low); }
-  .score .tile[data-k="done"] .n { color: var(--done); }
+  .score .tile[data-k="done"] .n { color: var(--muted); }
   .score .tile[data-k="open"] .n { color: var(--open); }
   @media (max-width: 760px) { .score { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 
@@ -108,6 +108,7 @@
   .chip[data-sev="low"] { color: var(--sev-low); background: var(--sev-low-bg); }
   .chip[data-sev="info"] { color: var(--sev-info); background: var(--sev-info-bg); }
   .chip[data-st="done"] { color: var(--done); background: var(--done-bg); }
+  .chip[data-st="partial"] { color: var(--open); background: var(--open-bg); }
   .chip[data-st="open"] { color: var(--open); background: var(--open-bg); }
 
   .callout { border: 1px solid var(--hair); border-left: 3px solid var(--sev-critical); background: var(--surface); border-radius: 6px; padding: 16px 20px; display: flex; flex-direction: column; gap: 8px; box-shadow: var(--shadow); }
@@ -138,6 +139,18 @@
   .finding[data-sev="critical"] { border-left-color: var(--sev-critical); }
   .finding[data-sev="high"] { border-left-color: var(--sev-high); }
   .finding[data-sev="medium"] { border-left-color: var(--sev-medium); }
+  /* 已完成项降低视觉权重，标题/摘要划线；修复依据保留可读。 */
+  .finding[data-status="done"], tr[data-status="done"] {
+    color: var(--muted); --ink: var(--muted); --accent: var(--muted);
+  }
+  .finding[data-status="done"] { border-left-color: var(--hair); }
+  .finding[data-status="done"] h3, tr[data-status="done"] td:last-child {
+    text-decoration: line-through; text-decoration-thickness: 1px;
+  }
+  .finding[data-status="done"] .chip, tr[data-status="done"] .chip {
+    color: var(--muted); background: var(--surface-2);
+  }
+  #fixed > h2 { color: var(--muted); }
   .finding + .finding { margin-top: 22px; }
   .finding .head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; }
   .finding .id { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 13px; color: var(--muted); font-weight: 500; }
@@ -164,10 +177,10 @@
     <a href="#summary">结论</a>
     <a href="#timeline">首次真实会话</a>
     <a href="#status">发现总览</a>
-    <a href="#fixed">已修复</a>
     <a href="#open">待处理</a>
     <a href="#sound">判定稳妥的部分</a>
     <a href="#evidence">附录：证据</a>
+    <a href="#fixed">已修复 · 8 项</a>
   </nav>
 
   <main>
@@ -176,12 +189,13 @@
       <h1>Bento 深度审计</h1>
       <p style="max-width:72ch;color:var(--muted)">对 macOS 菜单栏工具箱 Bento 全部源码、构建脚本与运行时状态的一次审计。报告在审计当天做了修订：期间发生了这套代码的首次真实远程会话，统一日志推翻了初版的一个核心结论，也暴露出一个初版没有发现的严重缺陷。</p>
       <div class="meta">
-        <div>基线 <b>9ed26fc</b>，修复至 <b>b17e1b2</b></div>
+        <div>基线 <b>9ed26fc</b>，修复核对至 <b>a9e6afb</b></div>
         <div>代码量 <b>8 文件 / 约 6,000 行 Swift</b></div>
         <div>环境 <b>macOS 27.0 (26A5425a) · Swift 6.4</b></div>
         <div>硬件 <b>M4 Pro · 两块 Studio Display · 无内置屏</b></div>
         <div>类型检查 <b>通过</b></div>
         <div>方法 <b>全量代码通读 + 只读运行时取证</b></div>
+        <div>状态更新 <b>2026-09-08 · 镜像恢复 9 项模拟回归通过</b></div>
       </div>
     </header>
 
@@ -201,8 +215,8 @@
         <div class="tile" data-k="high"><div class="n">3</div><div class="l">高</div></div>
         <div class="tile" data-k="medium"><div class="n">9</div><div class="l">中</div></div>
         <div class="tile" data-k="low"><div class="n">16</div><div class="l">低 / 提示</div></div>
-        <div class="tile" data-k="done"><div class="n">9</div><div class="l">已修复</div></div>
-        <div class="tile" data-k="open"><div class="n">21</div><div class="l">待处理</div></div>
+        <div class="tile" data-k="done"><div class="n">8</div><div class="l">已完整修复</div></div>
+        <div class="tile" data-k="open"><div class="n">22</div><div class="l">待完成 · 含 2 项部分修复</div></div>
       </div>
       <div class="actions">
         <div class="eyebrow">待处理项里建议优先的三件</div>
@@ -238,124 +252,35 @@
 
     <section id="status">
       <h2>发现总览</h2>
+      <p class="prose" style="color:var(--muted)">共 30 项：8 项完整修复，2 项部分修复，20 项待处理。未完成项优先展示，已修复行置灰、划线并排在表格末尾。</p>
       <div class="table-wrap">
         <table>
           <thead><tr><th>编号</th><th>严重度</th><th>状态</th><th>提交</th><th>问题</th></tr></thead>
           <tbody>
-            <tr><td class="nw"><a href="#M-1">M-1</a></td><td class="nw"><span class="chip" data-sev="critical">严重</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">b17e1b2</td><td>硬件镜像组里 <code>CGDisplayMirrorsDisplay</code> 恒为 0，镜像永远拆不掉且快照被清</td></tr>
-            <tr><td class="nw"><a href="#R-1">R-1</a></td><td class="nw"><span class="chip" data-sev="critical">严重</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">f480791</td><td>netstat 在 macOS 27 输出空表，屏幕共享探测永久失效且无 UI 提示</td></tr>
-            <tr><td class="nw"><a href="#R-2">R-2</a></td><td class="nw"><span class="chip" data-sev="high">高</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">3db76ad</td><td>分辨率切换无门槛，会把外接主屏切走（实测已发生）</td></tr>
-            <tr><td class="nw"><a href="#R-3">R-3</a></td><td class="nw"><span class="chip" data-sev="high">高</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">3db76ad</td><td>撤黑不校验是否真的锁定，固定等 1.2 秒</td></tr>
-            <tr><td class="nw"><a href="#T-1">T-1</a></td><td class="nw"><span class="chip" data-sev="high">高</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">3db76ad</td><td>事件 tap 回调里的辅助功能调用无超时，卡死的 App 会冻结全系统鼠标</td></tr>
-            <tr><td class="nw"><a href="#M-2">M-2</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">b17e1b2</td><td>睡眠中的显示器无法重配置，且恢复失败后没有任何重试</td></tr>
-            <tr><td class="nw"><a href="#R-8">R-8</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">3db76ad</td><td>探测健康度只进日志不进界面</td></tr>
-            <tr><td class="nw"><a href="#X-4">X-4</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">3db76ad</td><td>单实例守卫静默退出，新构建装上却起不来</td></tr>
-            <tr><td class="nw"><a href="#X-7">X-7</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="done">部分修复</span></td><td class="nw mono">3db76ad</td><td>文档与代码不符（CLAUDE.md 已更正，README 仍有漂移）</td></tr>
+            <tr data-status="partial"><td class="nw"><a href="#X-7">X-7</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="partial">部分修复</span></td><td class="nw mono">3db76ad</td><td>文档与代码不符（CLAUDE.md 已更正，README 仍有漂移）</td></tr>
             <tr><td class="nw"><a href="#R-4">R-4</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>先做镜像/分辨率/Dock 才压黑，重活期间桌面可见</td></tr>
             <tr><td class="nw"><a href="#R-5">R-5</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>施加与撤销顺序不是后进先出</td></tr>
             <tr><td class="nw"><a href="#R-6">R-6</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>分辨率快照的「不覆盖」规则不区分显示器</td></tr>
             <tr><td class="nw"><a href="#R-7">R-7</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>探测只看进程名，端口扫描即可触发熄屏与锁屏</td></tr>
             <tr><td class="nw"><a href="#T-2">T-2</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>甩动手势按几何判定，浏览器标签页拖拽会误触发最大化</td></tr>
             <tr><td class="nw"><a href="#X-1">X-1</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>Swift 运行时 trap 不进 error.log</td></tr>
-            <tr><td class="nw"><a href="#X-2">X-2</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>零自动化测试，熄屏路径没有演练入口</td></tr>
+            <tr data-status="partial"><td class="nw"><a href="#X-2">X-2</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="partial">部分修复</span></td><td class="nw mono">a9e6afb</td><td>已补镜像恢复测试，完整熄屏流程仍缺演练入口</td></tr>
             <tr><td class="nw"><a href="#X-8">X-8</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>熄屏本身不留日志痕迹，事后无法确认屏幕是否真的黑过</td></tr>
             <tr><td class="nw"><a href="#minor">其余 10 条</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>体验瑕疵与工程卫生，见「零散项」</td></tr>
             <tr><td class="nw"><a href="#icons">I-1…I-3</a></td><td class="nw"><span class="chip" data-sev="info">提示</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>已停用的图标管理模块，重新启用前需处理</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#M-1">M-1</a></td><td class="nw"><span class="chip" data-sev="critical">严重</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">b17e1b2</td><td>硬件镜像组里 <code>CGDisplayMirrorsDisplay</code> 恒为 0，镜像永远拆不掉且快照被清</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#R-1">R-1</a></td><td class="nw"><span class="chip" data-sev="critical">严重</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">f480791</td><td>netstat 在 macOS 27 输出空表，屏幕共享探测永久失效且无 UI 提示</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#R-2">R-2</a></td><td class="nw"><span class="chip" data-sev="high">高</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">3db76ad</td><td>分辨率切换无门槛，会把外接主屏切走（实测已发生）</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#R-3">R-3</a></td><td class="nw"><span class="chip" data-sev="high">高</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">3db76ad</td><td>撤黑不校验是否真的锁定，固定等 1.2 秒</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#T-1">T-1</a></td><td class="nw"><span class="chip" data-sev="high">高</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">3db76ad</td><td>事件 tap 回调里的辅助功能调用无超时，卡死的 App 会冻结全系统鼠标</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#M-2">M-2</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">a9e6afb</td><td>镜像副屏被误判为睡眠，恢复被跳过；睡眠后缺重试</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#R-8">R-8</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">3db76ad</td><td>探测健康度只进日志不进界面</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#X-4">X-4</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">3db76ad</td><td>单实例守卫静默退出，新构建装上却起不来</td></tr>
           </tbody>
         </table>
       </div>
     </section>
 
-    <section id="fixed">
-      <h2>已修复</h2>
-
-      <article class="finding" id="M-1" data-sev="critical">
-        <div class="head"><span class="chip" data-sev="critical">严重</span><span class="chip" data-st="done">已修复 b17e1b2</span><span class="id">M-1</span><h3>硬件镜像组里镜像永远拆不掉，而快照被清空</h3></div>
-        <div class="kv">
-          <div class="k">位置</div><div class="v loc">Sources/ScreenController.swift，原 restoreExtendedDisplays / restoreMirrorTargets / enableMirroring 三处判断</div>
-          <div class="k">问题</div><div class="v"><p><code>CGDisplayMirrorsDisplay</code> 只在<b>软件</b>镜像里返回主屏 ID。系统把两块 Studio Display 合并时走的是<b>硬件</b>镜像组，这个函数对组内每块屏（含从屏）都返回 <code>kCGNullDirectDisplay</code>。而解除镜像的三处分支全部以「不等于 <code>kCGNullDirectDisplay</code>」为条件，于是没有任何屏被判定需要解除。</p><p>后果是连锁的：<code>restored</code> 为空 → 取消配置 → <b>清空快照</b> → 日志写「Mirroring already disabled」。快照一清，自愈依据也没了，菜单里的「恢复扩展显示器」因为用同一个判断也是空转。两块屏就此永久停在镜像组里。</p></div>
-          <div class="k">发现</div><div class="v"><p>静态审计没有发现它。它只在镜像真正执行过之后才暴露，而审计时这条路径从未运行。是物主指出「今天通过屏幕共享连进来过」，顺着这条线查统一日志才找到。</p></div>
-          <div class="k">修复</div><div class="v"><ul>
-            <li>新增 <code>isMirrored()</code>（<code>CGDisplayIsInMirrorSet</code>），作为「是否需要拆」的唯一判据。</li>
-            <li>快照新增 <code>preMirrored</code>：记录拍快照时本来就在镜像组里的屏，恢复时原样不动，不去毁掉用户自己开的镜像。</li>
-            <li>只有确认没有屏残留在镜像组时才清快照，否则保留并记日志。</li>
-          </ul></div>
-        </div>
-      </article>
-
-      <article class="finding" id="R-1" data-sev="critical">
-        <div class="head"><span class="chip" data-sev="critical">严重</span><span class="chip" data-st="done">已修复 f480791</span><span class="id">R-1</span><h3>屏幕共享探测永久失效，界面却一直显示「监控中」</h3></div>
-        <div class="kv">
-          <div class="k">问题</div><div class="v"><p>探测靠解析 <code>netstat -an -p tcp</code> 找 5900 端口的 ESTABLISHED 连接。macOS 27 上 <code>net.inet.tcp.pcblist*</code> 这组 sysctl 已不存在，netstat 对任何非 root 进程都输出空表（本次实测 0 行），探测永远返回「未知」。物主的远程会话正是屏幕共享，所以整条链路六周内一次都没触发。</p></div>
-          <div class="k">证据</div><div class="v"><p>error.log 里「netstat 探测不可用」出现四次，正好是每次启动：07-30、08-25 两次、09-04。六周里这条信息只进了日志。</p></div>
-          <div class="k">修复</div><div class="v"><p>改用 <code>pgrep -x screensharingd</code>。该守护进程由 launchd 在连接被接受时拉起、最后一个观看端断开约 15 秒后退出，退出码语义与 RustDesk 那一路完全一致。必须用 <code>-x</code> 精确匹配，否则会误报常驻的 <code>ScreenSharingSubscriber</code>。健康度上报见 <a href="#R-8">R-8</a>。</p></div>
-        </div>
-      </article>
-
-      <article class="finding" id="R-2" data-sev="high">
-        <div class="head"><span class="chip" data-sev="high">高</span><span class="chip" data-st="done">已修复 3db76ad</span><span class="id">R-2</span><h3>分辨率切换没有门槛，会把外接主屏切走</h3></div>
-        <div class="kv">
-          <div class="k">问题</div><div class="v"><p>目标 1512×982 HiDPI 是 14 寸 MacBook Pro 内置屏的模式。用与代码相同的匹配条件枚举，两块 Studio Display 的模式表里<b>都有</b>这一档。当时的 CLAUDE.md 断言「本机不存在该模式，这一步是无害的空操作」，是错的。</p></div>
-          <div class="k">实证</div><div class="v"><p>02:56:13 的日志：<code>kCGSDisplayConfigMode 38</code> → <code>1512×982</code>。切换确实发生了。</p></div>
-          <div class="k">修复</div><div class="v"><p>只在主屏是内置屏时执行（<code>CGDisplayIsBuiltin</code>）。这台 Mac 没有内置屏，该步骤成为真正的空操作；MacBook 上行为不变。恢复路径不设门槛，旧快照照常恢复。CLAUDE.md 的错误断言已更正。</p></div>
-        </div>
-      </article>
-
-      <article class="finding" id="R-3" data-sev="high">
-        <div class="head"><span class="chip" data-sev="high">高</span><span class="chip" data-st="done">已修复 3db76ad</span><span class="id">R-3</span><h3>撤黑不校验是否真的锁定</h3></div>
-        <div class="kv">
-          <div class="k">问题</div><div class="v"><p><code>open -a ScreenSaverEngine</code> 退出码 0 只说明 LaunchServices 接受了请求，既不代表屏保已盖上，也不代表已上锁（取决于「屏保开始后要求密码」的延迟设置）。代码不校验，固定 1.2 秒后无条件撤黑。本机当前设置是「立即」，所以现在成立，但这是没被代码守住的隐私前提。</p></div>
-          <div class="k">修复</div><div class="v"><p>每 0.25 秒查一次会话字典的 <code>CGSSessionScreenIsLocked</code>，并接收 <code>com.apple.screenIsLocked</code> 分布式通知作第二路信号，确认后 0.3 秒撤黑。六秒内未确认则记日志、状态行标注「上次断开后锁屏未确认」，然后照旧撤黑：一直黑着会让本地用户连菜单都看不见，比裸露更糟。</p></div>
-        </div>
-      </article>
-
-      <article class="finding" id="T-1" data-sev="high">
-        <div class="head"><span class="chip" data-sev="high">高</span><span class="chip" data-st="done">已修复 3db76ad</span><span class="id">T-1</span><h3>辅助功能调用没有超时，会冻结全系统鼠标</h3></div>
-        <div class="kv">
-          <div class="k">问题</div><div class="v"><p>分屏的事件 tap 处在 HID 事件链上：回调返回前，整个登录会话的鼠标事件都排在后面。双击标题栏时回调同步调用辅助功能接口，而进程从未设过消息超时，默认约六秒。目标 App 转菊花时，这几次调用会逐个等满超时，表现为全系统鼠标冻结数秒。</p></div>
-          <div class="k">修复</div><div class="v"><p><code>WindowManager.init</code> 里对系统级元素设进程级超时 0.5 秒，对之后所有辅助功能调用生效。正常 App 的往返是毫秒级，会撞上 0.5 秒的只有不响应的 App，而那时放行点击正是应有的结果。</p></div>
-        </div>
-      </article>
-
-      <article class="finding" id="M-2" data-sev="medium">
-        <div class="head"><span class="chip" data-sev="medium">中</span><span class="chip" data-st="done">已修复 b17e1b2</span><span class="id">M-2</span><h3>睡眠中的显示器无法重配置，且恢复失败后没有重试</h3></div>
-        <div class="kv">
-          <div class="k">问题</div><div class="v"><p>验证 M-1 的修复时实测：两块屏 <code>CGDisplayIsActive</code> 为假时，逐个 <code>CGConfigureDisplayMirrorOfDisplay</code> 都返回成功，<code>CGCompleteDisplayConfiguration</code> 却整体失败（错误 1014）。而空闲轮询的镜像清理是边沿触发的，断开那一刻屏幕若正好睡着，一次失败之后就再也没有第二次尝试。</p></div>
-          <div class="k">修复</div><div class="v"><p>两条恢复路径在检测到任一显示器睡眠时提前让路并保留快照；空闲轮询在 <code>hasPendingMirrorRestore</code> 为真时持续重试，屏幕唤醒后自动补上。</p></div>
-        </div>
-      </article>
-
-      <article class="finding" id="R-8" data-sev="medium">
-        <div class="head"><span class="chip" data-sev="medium">中</span><span class="chip" data-st="done">已修复 3db76ad</span><span class="id">R-8</span><h3>探测健康度只进日志不进界面</h3></div>
-        <div class="kv">
-          <div class="k">问题</div><div class="v"><p>R-1 之所以能沉默六周，是因为失效只写 error.log，状态行始终是「监控中」。下一次探测手段失效会以同样的方式沉默。</p></div>
-          <div class="k">修复</div><div class="v"><p>按路记录连续「未知」的轮数，连续 10 轮（30 秒）即判定该来源失效：状态行追加「屏幕共享探测不可用」，状态栏图标换成带警告角标的样式，恢复时再记一条日志。</p></div>
-        </div>
-      </article>
-
-      <article class="finding" id="X-4" data-sev="low">
-        <div class="head"><span class="chip" data-sev="low">低</span><span class="chip" data-st="done">已修复 3db76ad</span><span class="id">X-4</span><h3>单实例守卫静默退出，新构建装上却起不来</h3></div>
-        <div class="kv">
-          <div class="k">问题</div><div class="v"><p>旧实例还在运行时启动新实例，新实例直接 <code>exit(0)</code>，不留任何痕迹。而 <code>open Bento.app</code> 对着已在运行的同路径 App 只会激活旧实例。表现就是「重新构建了，但改动没生效」。</p></div>
-          <div class="k">修复</div><div class="v"><p>退出前同步写一行日志；SIGTERM 转成正常退出流程，使收尾逻辑不被跳过；<code>build_app.sh</code> 新增 <code>--relaunch</code>，构建后退出旧实例再启动新包。</p></div>
-        </div>
-      </article>
-
-      <article class="finding" id="X-7" data-sev="low">
-        <div class="head"><span class="chip" data-sev="low">低</span><span class="chip" data-st="done">部分修复</span><span class="id">X-7</span><h3>文档与代码不符</h3></div>
-        <div class="kv">
-          <div class="k">已更正</div><div class="v"><p>CLAUDE.md 里 1512×982 的错误断言、锁屏语义、镜像判据、AX 超时、重启方式均已同步。</p></div>
-          <div class="k">仍有漂移</div><div class="v"><ul>
-            <li>README 写「⌘ + 拖动标题栏吸附」，代码只认 Shift。</li>
-            <li>README 写双击取重叠面积最大的格子，代码取点击点所在格子。</li>
-            <li>README 未提 Shift 双击铺满与甩动手势。</li>
-            <li>README 的图标管理整节描述的是已停用的模块。</li>
-            <li>README 说授权后需退出重开，实际菜单里有「重新检测滚动权限」。</li>
-            <li>CLAUDE.md 防睡段写的键名是 <code>SleepGuardDefaultMinutes</code>，代码里是 <code>SleepGuardCustomMinutes</code>。</li>
-          </ul></div>
-        </div>
-      </article>
-    </section>
 
     <section id="open">
       <h2>待处理</h2>
@@ -418,13 +343,29 @@
         </div>
       </article>
 
-      <article class="finding" id="X-2" data-sev="medium">
-        <div class="head"><span class="chip" data-sev="medium">中</span><span class="id">X-2</span><h3>零自动化测试，熄屏路径没有演练入口</h3></div>
+      <article class="finding" id="X-2" data-status="partial" data-sev="medium">
+        <div class="head"><span class="chip" data-sev="medium">中</span><span class="chip" data-st="partial">部分修复 a9e6afb</span><span class="id">X-2</span><h3>已有镜像回归测试，完整熄屏流程仍缺演练入口</h3></div>
         <div class="kv">
-          <div class="k">问题</div><div class="v"><p>大量逻辑不依赖 UI，本可直接单测：布局树的操作与容错解码、两个甩动判定、探测三态到状态机的流转、快照的不覆盖规则。而整条熄屏链路至今只被真实会话验证过一次，唯一的验证方式是让人远程连进来，或让局域网扫一下 5900 端口，后者会直接黑屏加锁屏。</p></div>
+          <div class="k">已补充</div><div class="v"><p><code>a9e6afb</code> 新增 9 项镜像恢复模拟回归测试，直接编译当前 <code>ScreenController.swift</code> 并替换显示器接口，不改变真实显示器布局。原先「零自动化测试」的描述已不适用。</p></div>
+          <div class="k">仍待处理</div><div class="v"><p>大量逻辑不依赖 UI，本可直接单测：布局树的操作与容错解码、两个甩动判定、探测三态到状态机的流转、快照的不覆盖规则。而整条熄屏链路至今只被真实会话验证过一次，唯一的验证方式是让人远程连进来，或让局域网扫一下 5900 端口，后者会直接黑屏加锁屏。</p></div>
           <div class="k">建议</div><div class="v"><ul>
             <li>菜单加一项「模拟远程连接」，走完整的镜像、Dock、压黑、锁定确认、恢复流程，不依赖真实连接。</li>
             <li>把纯逻辑抽到不引用 AppKit 的文件，加一个 <code>./build_app.sh --test</code>。</li>
+          </ul></div>
+        </div>
+      </article>
+
+      <article class="finding" id="X-7" data-status="partial" data-sev="low">
+        <div class="head"><span class="chip" data-sev="low">低</span><span class="chip" data-st="partial">部分修复</span><span class="id">X-7</span><h3>文档与代码不符</h3></div>
+        <div class="kv">
+          <div class="k">已更正</div><div class="v"><p>CLAUDE.md 里 1512×982 的错误断言、锁屏语义、镜像判据、AX 超时、重启方式均已同步。</p></div>
+          <div class="k">仍有漂移</div><div class="v"><ul>
+            <li>README 写「⌘ + 拖动标题栏吸附」，代码只认 Shift。</li>
+            <li>README 写双击取重叠面积最大的格子，代码取点击点所在格子。</li>
+            <li>README 未提 Shift 双击铺满与甩动手势。</li>
+            <li>README 的图标管理整节描述的是已停用的模块。</li>
+            <li>README 说授权后需退出重开，实际菜单里有「重新检测滚动权限」。</li>
+            <li>CLAUDE.md 防睡段写的键名是 <code>SleepGuardDefaultMinutes</code>，代码里是 <code>SleepGuardCustomMinutes</code>。</li>
           </ul></div>
         </div>
       </article>
@@ -535,9 +476,88 @@ CGCompleteDisplayConfiguration: err 1014 (1 块)
    4  图标管理: 回写字典（可见顺序不符）</pre>
     </section>
 
+    <section id="fixed">
+      <h2>已修复 · 8 项</h2>
+      <p class="prose" style="color:var(--muted)">以下条目已对照当前代码确认完成，移至报告底部归档。标题加删除线，正文与标签置灰；修复依据保留供追溯。部分修复项仍在待处理区。</p>
+
+      <article class="finding" data-status="done" id="M-1" data-sev="critical">
+        <div class="head"><span class="chip" data-sev="critical">严重</span><span class="chip" data-st="done">已修复 b17e1b2</span><span class="id">M-1</span><h3>硬件镜像组里镜像永远拆不掉，而快照被清空</h3></div>
+        <div class="kv">
+          <div class="k">位置</div><div class="v loc">Sources/ScreenController.swift，原 restoreExtendedDisplays / restoreMirrorTargets / enableMirroring 三处判断</div>
+          <div class="k">问题</div><div class="v"><p><code>CGDisplayMirrorsDisplay</code> 只在<b>软件</b>镜像里返回主屏 ID。系统把两块 Studio Display 合并时走的是<b>硬件</b>镜像组，这个函数对组内每块屏（含从屏）都返回 <code>kCGNullDirectDisplay</code>。而解除镜像的三处分支全部以「不等于 <code>kCGNullDirectDisplay</code>」为条件，于是没有任何屏被判定需要解除。</p><p>后果是连锁的：<code>restored</code> 为空 → 取消配置 → <b>清空快照</b> → 日志写「Mirroring already disabled」。快照一清，自愈依据也没了，菜单里的「恢复扩展显示器」因为用同一个判断也是空转。两块屏就此永久停在镜像组里。</p></div>
+          <div class="k">发现</div><div class="v"><p>静态审计没有发现它。它只在镜像真正执行过之后才暴露，而审计时这条路径从未运行。是物主指出「今天通过屏幕共享连进来过」，顺着这条线查统一日志才找到。</p></div>
+          <div class="k">修复</div><div class="v"><ul>
+            <li>新增 <code>isMirrored()</code>（<code>CGDisplayIsInMirrorSet</code>），作为「是否需要拆」的唯一判据。</li>
+            <li>快照新增 <code>preMirrored</code>：记录拍快照时本来就在镜像组里的屏，恢复时原样不动，不去毁掉用户自己开的镜像。</li>
+            <li>只有确认没有屏残留在镜像组时才清快照，否则保留并记日志。</li>
+          </ul></div>
+        </div>
+      </article>
+
+      <article class="finding" data-status="done" id="R-1" data-sev="critical">
+        <div class="head"><span class="chip" data-sev="critical">严重</span><span class="chip" data-st="done">已修复 f480791</span><span class="id">R-1</span><h3>屏幕共享探测永久失效，界面却一直显示「监控中」</h3></div>
+        <div class="kv">
+          <div class="k">问题</div><div class="v"><p>探测靠解析 <code>netstat -an -p tcp</code> 找 5900 端口的 ESTABLISHED 连接。macOS 27 上 <code>net.inet.tcp.pcblist*</code> 这组 sysctl 已不存在，netstat 对任何非 root 进程都输出空表（本次实测 0 行），探测永远返回「未知」。物主的远程会话正是屏幕共享，所以整条链路六周内一次都没触发。</p></div>
+          <div class="k">证据</div><div class="v"><p>error.log 里「netstat 探测不可用」出现四次，正好是每次启动：07-30、08-25 两次、09-04。六周里这条信息只进了日志。</p></div>
+          <div class="k">修复</div><div class="v"><p>改用 <code>pgrep -x screensharingd</code>。该守护进程由 launchd 在连接被接受时拉起、最后一个观看端断开约 15 秒后退出，退出码语义与 RustDesk 那一路完全一致。必须用 <code>-x</code> 精确匹配，否则会误报常驻的 <code>ScreenSharingSubscriber</code>。健康度上报见 <a href="#R-8">R-8</a>。</p></div>
+        </div>
+      </article>
+
+      <article class="finding" data-status="done" id="R-2" data-sev="high">
+        <div class="head"><span class="chip" data-sev="high">高</span><span class="chip" data-st="done">已修复 3db76ad</span><span class="id">R-2</span><h3>分辨率切换没有门槛，会把外接主屏切走</h3></div>
+        <div class="kv">
+          <div class="k">问题</div><div class="v"><p>目标 1512×982 HiDPI 是 14 寸 MacBook Pro 内置屏的模式。用与代码相同的匹配条件枚举，两块 Studio Display 的模式表里<b>都有</b>这一档。当时的 CLAUDE.md 断言「本机不存在该模式，这一步是无害的空操作」，是错的。</p></div>
+          <div class="k">实证</div><div class="v"><p>02:56:13 的日志：<code>kCGSDisplayConfigMode 38</code> → <code>1512×982</code>。切换确实发生了。</p></div>
+          <div class="k">修复</div><div class="v"><p>只在主屏是内置屏时执行（<code>CGDisplayIsBuiltin</code>）。这台 Mac 没有内置屏，该步骤成为真正的空操作；MacBook 上行为不变。恢复路径不设门槛，旧快照照常恢复。CLAUDE.md 的错误断言已更正。</p></div>
+        </div>
+      </article>
+
+      <article class="finding" data-status="done" id="R-3" data-sev="high">
+        <div class="head"><span class="chip" data-sev="high">高</span><span class="chip" data-st="done">已修复 3db76ad</span><span class="id">R-3</span><h3>撤黑不校验是否真的锁定</h3></div>
+        <div class="kv">
+          <div class="k">问题</div><div class="v"><p><code>open -a ScreenSaverEngine</code> 退出码 0 只说明 LaunchServices 接受了请求，既不代表屏保已盖上，也不代表已上锁（取决于「屏保开始后要求密码」的延迟设置）。代码不校验，固定 1.2 秒后无条件撤黑。本机当前设置是「立即」，所以现在成立，但这是没被代码守住的隐私前提。</p></div>
+          <div class="k">修复</div><div class="v"><p>每 0.25 秒查一次会话字典的 <code>CGSSessionScreenIsLocked</code>，并接收 <code>com.apple.screenIsLocked</code> 分布式通知作第二路信号，确认后 0.3 秒撤黑。六秒内未确认则记日志、状态行标注「上次断开后锁屏未确认」，然后照旧撤黑：一直黑着会让本地用户连菜单都看不见，比裸露更糟。</p></div>
+        </div>
+      </article>
+
+      <article class="finding" data-status="done" id="T-1" data-sev="high">
+        <div class="head"><span class="chip" data-sev="high">高</span><span class="chip" data-st="done">已修复 3db76ad</span><span class="id">T-1</span><h3>辅助功能调用没有超时，会冻结全系统鼠标</h3></div>
+        <div class="kv">
+          <div class="k">问题</div><div class="v"><p>分屏的事件 tap 处在 HID 事件链上：回调返回前，整个登录会话的鼠标事件都排在后面。双击标题栏时回调同步调用辅助功能接口，而进程从未设过消息超时，默认约六秒。目标 App 转菊花时，这几次调用会逐个等满超时，表现为全系统鼠标冻结数秒。</p></div>
+          <div class="k">修复</div><div class="v"><p><code>WindowManager.init</code> 里对系统级元素设进程级超时 0.5 秒，对之后所有辅助功能调用生效。正常 App 的往返是毫秒级，会撞上 0.5 秒的只有不响应的 App，而那时放行点击正是应有的结果。</p></div>
+        </div>
+      </article>
+
+      <article class="finding" data-status="done" id="M-2" data-sev="medium">
+        <div class="head"><span class="chip" data-sev="medium">中</span><span class="chip" data-st="done">已修复 a9e6afb</span><span class="id">M-2</span><h3>睡眠中的显示器无法重配置，且恢复失败后没有重试</h3></div>
+        <div class="kv">
+          <div class="k">问题</div><div class="v"><p>验证 M-1 的修复时实测：显示器睡眠时，逐个 <code>CGConfigureDisplayMirrorOfDisplay</code> 都返回成功，<code>CGCompleteDisplayConfiguration</code> 却整体失败（错误 1014）。而空闲轮询的镜像清理是边沿触发的，断开那一刻屏幕若正好睡着，一次失败之后就再也没有第二次尝试。</p></div>
+          <div class="k">修复</div><div class="v"><p>首次修复 <code>b17e1b2</code> 加入睡眠时保留快照与空闲轮询重试，但误把 <code>CGDisplayIsActive == false</code> 当作睡眠：硬件镜像副屏即使醒着也可能不是活动显示器，因此菜单恢复仍被拦截。<code>a9e6afb</code> 改为只检查 <code>CGDisplayIsAsleep</code>；手动恢复失败会显示原因，配置失败保留快照，提交成功后确认镜像状态再清除快照。</p></div>
+          <div class="k">验证</div><div class="v"><p><code>Tests/run_mirror_restore_tests.sh</code> 的 9 项模拟回归通过，覆盖醒着但非活动的镜像副屏、睡眠唤醒重试、配置/提交/读取失败等。新版已构建并重启；真实远程会话后的恢复仍待复测。</p></div>
+        </div>
+      </article>
+
+      <article class="finding" data-status="done" id="R-8" data-sev="medium">
+        <div class="head"><span class="chip" data-sev="medium">中</span><span class="chip" data-st="done">已修复 3db76ad</span><span class="id">R-8</span><h3>探测健康度只进日志不进界面</h3></div>
+        <div class="kv">
+          <div class="k">问题</div><div class="v"><p>R-1 之所以能沉默六周，是因为失效只写 error.log，状态行始终是「监控中」。下一次探测手段失效会以同样的方式沉默。</p></div>
+          <div class="k">修复</div><div class="v"><p>按路记录连续「未知」的轮数，连续 10 轮（30 秒）即判定该来源失效：状态行追加「屏幕共享探测不可用」，状态栏图标换成带警告角标的样式，恢复时再记一条日志。</p></div>
+        </div>
+      </article>
+
+      <article class="finding" data-status="done" id="X-4" data-sev="low">
+        <div class="head"><span class="chip" data-sev="low">低</span><span class="chip" data-st="done">已修复 3db76ad</span><span class="id">X-4</span><h3>单实例守卫静默退出，新构建装上却起不来</h3></div>
+        <div class="kv">
+          <div class="k">问题</div><div class="v"><p>旧实例还在运行时启动新实例，新实例直接 <code>exit(0)</code>，不留任何痕迹。而 <code>open Bento.app</code> 对着已在运行的同路径 App 只会激活旧实例。表现就是「重新构建了，但改动没生效」。</p></div>
+          <div class="k">修复</div><div class="v"><p>退出前同步写一行日志；SIGTERM 转成正常退出流程，使收尾逻辑不被跳过；<code>build_app.sh</code> 新增 <code>--relaunch</code>，构建后退出旧实例再启动新包。</p></div>
+        </div>
+      </article>
+
+    </section>
+
     <footer>
-      审计与修复均在 2026-09-08 完成。已修复项对应提交 f480791、3db76ad、b17e1b2。
-      本报告随代码一同版本化，后续审计请另开文件而非覆盖本文。
+      审计及修复状态更新于 2026-09-08。修复记录：f480791、3db76ad、b17e1b2、a9e6afb。
+      本报告随代码一同版本化；保留原始审计证据，修复状态随代码更新。
     </footer>
   </main>
 </div>
