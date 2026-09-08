@@ -7,16 +7,51 @@ import Foundation
 class ScreenController {
     private var isBlack = false
     private let mirrorSnapshotDefaultsKey = "BentoMirrorSnapshot"
-    private var savedMirrorTargets: [CGDirectDisplayID: CGDirectDisplayID]?
+    private var savedMirrorState: MirrorState?
+
+    /// 快照下来的镜像状态：每块非主屏的镜像目标，外加「快照时它本来就在镜像组里」的标记。
+    /// 后者不可省——硬件镜像组里 CGDisplayMirrorsDisplay 对每块屏都返回 0，光看目标值
+    /// 区分不出「用户自己开着镜像」和「本来是扩展」，恢复时把前者拆掉就是毁掉用户的设置
+    private struct MirrorState {
+        var targets: [CGDirectDisplayID: CGDirectDisplayID]
+        var preMirrored: Set<CGDirectDisplayID>
+    }
 
     private struct MirrorSnapshot: Codable {
         let entries: [MirrorSnapshotEntry]
+        /// 旧快照没有这个字段：解出 nil 视为「当时没有任何屏预先处于镜像组」
+        let preMirrored: [UInt32]?
     }
 
     private struct MirrorSnapshotEntry: Codable {
         let displayID: UInt32
         let mirrorsDisplayID: UInt32
     }
+
+    /// 「这块屏此刻是否处在镜像中」的**唯一**可靠判据。
+    ///
+    /// CGDisplayMirrorsDisplay 只在**软件**镜像里返回主屏 ID；一旦系统走**硬件**镜像组，
+    /// 它对组内每一块屏（含从屏）都返回 kCGNullDirectDisplay。2026-09-08 实测：本机两块
+    /// Studio Display 被 CGConfigureDisplayMirrorOfDisplay 合并后走的正是硬件镜像 ——
+    /// 于是所有以「!= kCGNullDirectDisplay」为条件的解除分支一条都不执行，restored 为空
+    /// → 取消配置 + 清快照 + 日志写「已解除」，镜像永久留在系统里，连菜单的
+    /// 「恢复扩展显示器」都救不回来（那次远程会话结束后两块屏就这样一直镜像着）。
+    /// 判断「是否需要拆」一律用这个函数，别再用 CGDisplayMirrorsDisplay
+    private func isMirrored(_ d: CGDirectDisplayID) -> Bool {
+        CGDisplayIsInMirrorSet(d) != 0
+    }
+
+    /// 睡眠中的显示器无法重新配置：2026-09-08 实测，两块屏 CGDisplayIsActive=false 时
+    /// CGConfigureDisplayMirrorOfDisplay 逐个返回成功，CGCompleteDisplayConfiguration
+    /// 却整体失败（错误 1014）。此时必须保留快照等唤醒后重试，绝不能当成「已恢复」清掉
+    private func anyDisplayAsleep(_ displays: [CGDirectDisplayID]) -> Bool {
+        displays.contains { CGDisplayIsAsleep($0) != 0 || CGDisplayIsActive($0) == 0 }
+    }
+
+    /// 还有未完成的镜像恢复（快照仍在）。轮询的空闲支路据此重试——空闲清理本身是
+    /// 边沿触发的，一次失败（如断开时屏幕已睡）之后就再没有第二次机会，
+    /// 桌面会一直停在镜像态
+    var hasPendingMirrorRestore: Bool { hasMirrorSnapshot() }
 
     func enableMirroring() {
         let displays = onlineDisplays()
@@ -25,9 +60,10 @@ class ScreenController {
 
         let hadSnapshot = hasMirrorSnapshot()
         if !hadSnapshot {
-            let snapshot = currentMirrorTargets(for: displays, main: main)
-            saveMirrorSnapshot(snapshot)
-            NSLog("Mirroring: saved pre-remote snapshot for \(snapshot.count) display(s)")
+            let state = currentMirrorState(for: displays, main: main)
+            saveMirrorSnapshot(state)
+            NSLog("Mirroring: saved pre-remote snapshot for \(state.targets.count) display(s), "
+                + "\(state.preMirrored.count) already mirrored")
         }
 
         var config: CGDisplayConfigRef?
@@ -40,13 +76,14 @@ class ScreenController {
 
         var mirrored: [CGDirectDisplayID] = []
         for d in displays where d != main {
-            if CGDisplayMirrorsDisplay(d) != main {
-                let e = CGConfigureDisplayMirrorOfDisplay(config, d, main)
-                if e == .success {
-                    mirrored.append(d)
-                } else {
-                    NSLog("Mirroring config failed for display \(d): \(e.rawValue)")
-                }
+            // 已在镜像组里就不必再配一遍（硬件镜像下 CGDisplayMirrorsDisplay 恒为 0，
+            // 只比它会对已经镜像好的屏重复下发配置）
+            guard !isMirrored(d) else { continue }
+            let e = CGConfigureDisplayMirrorOfDisplay(config, d, main)
+            if e == .success {
+                mirrored.append(d)
+            } else {
+                NSLog("Mirroring config failed for display \(d): \(e.rawValue)")
             }
         }
 
@@ -74,13 +111,18 @@ class ScreenController {
             return
         }
 
-        restoreMirrorTargets(snapshot)
+        restoreMirrorState(snapshot)
     }
 
     func restoreExtendedDisplays() {
         let displays = onlineDisplays()
         guard displays.count > 1 else {
             clearMirrorSnapshot()
+            return
+        }
+
+        guard !anyDisplayAsleep(displays) else {
+            ErrorLog.log("镜像: 显示器处于睡眠，无法重新配置，本次跳过（唤醒后可再试）")
             return
         }
 
@@ -91,8 +133,11 @@ class ScreenController {
             return
         }
 
+        // 判据用 isMirrored 而不是 CGDisplayMirrorsDisplay：见 isMirrored 的说明。
+        // 这是用户手动的「强制拆回扩展」入口，不理会 preMirrored——他点了就是要扩展
         var restored: [CGDirectDisplayID] = []
-        for d in displays where CGDisplayMirrorsDisplay(d) != kCGNullDirectDisplay {
+        let main = CGMainDisplayID()
+        for d in displays where d != main && isMirrored(d) {
             if CGConfigureDisplayMirrorOfDisplay(config, d, kCGNullDirectDisplay) == .success {
                 restored.append(d)
             }
@@ -114,10 +159,16 @@ class ScreenController {
         }
     }
 
-    private func restoreMirrorTargets(_ targets: [CGDirectDisplayID: CGDirectDisplayID]) {
+    private func restoreMirrorState(_ state: MirrorState) {
         let displays = onlineDisplays()
         guard displays.count > 1 else {
             clearMirrorSnapshot()
+            return
+        }
+
+        // 屏幕睡着时重配置必失败：保留快照，等轮询在唤醒后重试
+        guard !anyDisplayAsleep(displays) else {
+            NSLog("Mirroring restore deferred: display asleep")
             return
         }
 
@@ -130,12 +181,21 @@ class ScreenController {
 
         var restored: [CGDirectDisplayID] = []
         let onlineSet = Set(displays)
-        for d in displays where d != CGMainDisplayID() {
-            var desired = targets[d] ?? kCGNullDirectDisplay
+        let main = CGMainDisplayID()
+        for d in displays where d != main {
+            // 快照时用户自己就开着镜像的屏：原样不动，别替他拆掉
+            guard !state.preMirrored.contains(d) else { continue }
+            var desired = state.targets[d] ?? kCGNullDirectDisplay
             if desired != kCGNullDirectDisplay && !onlineSet.contains(desired) {
                 desired = kCGNullDirectDisplay
             }
-            guard CGDisplayMirrorsDisplay(d) != desired else { continue }
+            // 要拆镜像时必须用 isMirrored 判断当前状态：硬件镜像下 CGDisplayMirrorsDisplay
+            // 恒为 0，只比它会把「该拆的」当成「已经拆好了」而跳过
+            if desired == kCGNullDirectDisplay {
+                guard isMirrored(d) else { continue }
+            } else {
+                guard CGDisplayMirrorsDisplay(d) != desired else { continue }
+            }
 
             if CGConfigureDisplayMirrorOfDisplay(config, d, desired) == .success {
                 restored.append(d)
@@ -144,8 +204,17 @@ class ScreenController {
 
         guard !restored.isEmpty else {
             CGCancelDisplayConfiguration(config)
-            clearMirrorSnapshot()
-            NSLog("Mirroring restored from snapshot; no changes needed")
+            // 清快照前先确认真的没有遗留：快照一清就再没有依据去拆镜像。
+            // 这正是那次会话的教训——判据看错 → 认定无事可做 → 清快照 → 镜像永久留下
+            let stillMirrored = displays.filter {
+                $0 != main && isMirrored($0) && !state.preMirrored.contains($0)
+            }
+            if stillMirrored.isEmpty {
+                clearMirrorSnapshot()
+                NSLog("Mirroring restored from snapshot; no changes needed")
+            } else {
+                ErrorLog.log("镜像: 判定无需恢复，但 \(stillMirrored) 仍在镜像组，保留快照待下次重试")
+            }
             return
         }
 
@@ -169,35 +238,37 @@ class ScreenController {
         return Array(displays.prefix(Int(count)))
     }
 
-    private func currentMirrorTargets(
+    private func currentMirrorState(
         for displays: [CGDirectDisplayID],
         main: CGDirectDisplayID
-    ) -> [CGDirectDisplayID: CGDirectDisplayID] {
+    ) -> MirrorState {
         var targets: [CGDirectDisplayID: CGDirectDisplayID] = [:]
+        var pre: Set<CGDirectDisplayID> = []
         for d in displays where d != main {
             targets[d] = CGDisplayMirrorsDisplay(d)
+            if isMirrored(d) { pre.insert(d) }
         }
-        return targets
+        return MirrorState(targets: targets, preMirrored: pre)
     }
 
     private func hasMirrorSnapshot() -> Bool {
-        savedMirrorTargets != nil || UserDefaults.standard.data(forKey: mirrorSnapshotDefaultsKey) != nil
+        savedMirrorState != nil || UserDefaults.standard.data(forKey: mirrorSnapshotDefaultsKey) != nil
     }
 
-    private func saveMirrorSnapshot(_ targets: [CGDirectDisplayID: CGDirectDisplayID]) {
-        let entries = targets.map {
+    private func saveMirrorSnapshot(_ state: MirrorState) {
+        let entries = state.targets.map {
             MirrorSnapshotEntry(displayID: $0.key, mirrorsDisplayID: $0.value)
         }
-        let snapshot = MirrorSnapshot(entries: entries)
+        let snapshot = MirrorSnapshot(entries: entries, preMirrored: Array(state.preMirrored))
         if let data = try? JSONEncoder().encode(snapshot) {
             UserDefaults.standard.set(data, forKey: mirrorSnapshotDefaultsKey)
         }
-        savedMirrorTargets = targets
+        savedMirrorState = state
     }
 
-    private func loadMirrorSnapshot() -> [CGDirectDisplayID: CGDirectDisplayID]? {
-        if let savedMirrorTargets {
-            return savedMirrorTargets
+    private func loadMirrorSnapshot() -> MirrorState? {
+        if let savedMirrorState {
+            return savedMirrorState
         }
         guard let data = UserDefaults.standard.data(forKey: mirrorSnapshotDefaultsKey) else { return nil }
         guard let snapshot = try? JSONDecoder().decode(MirrorSnapshot.self, from: data) else {
@@ -211,12 +282,13 @@ class ScreenController {
         for entry in snapshot.entries {
             targets[entry.displayID] = entry.mirrorsDisplayID
         }
-        savedMirrorTargets = targets
-        return targets
+        let state = MirrorState(targets: targets, preMirrored: Set(snapshot.preMirrored ?? []))
+        savedMirrorState = state
+        return state
     }
 
     private func clearMirrorSnapshot() {
-        savedMirrorTargets = nil
+        savedMirrorState = nil
         UserDefaults.standard.removeObject(forKey: mirrorSnapshotDefaultsKey)
     }
 

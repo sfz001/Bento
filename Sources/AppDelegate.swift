@@ -443,7 +443,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             // 空闲态：镜像清理是幂等兜底（只在有残留快照时动手），unknown 也照走
             // ——某一路探测永久 unknown 时，启动首轮的镜像恢复不能被卡住
-            if lastPolledConnected != false { screenCtl.disableMirroring() }
+            // 边沿触发 + 「还有未完成的恢复就继续重试」：断开那一刻屏幕若正好睡着，
+            // 镜像恢复会失败，只靠边沿触发就再也不会有第二次尝试（无快照时是空操作）
+            if lastPolledConnected != false || screenCtl.hasPendingMirrorRestore {
+                screenCtl.disableMirroring()
+            }
             lastPolledConnected = false
             // 空闲态的探测故障不在这里记：noteProbeHealth 按连续轮数判定并进状态栏
         }
