@@ -220,6 +220,8 @@ cat > "$APP_BUNDLE/Contents/Info.plist" << 'PLIST_EOF'
     <string>14.0</string>
     <key>LSUIElement</key>
     <true/>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Bento 需要控制「终端」，以在你选择 FileVault 免密重启时打开认证重启命令；执行仍需你在终端确认管理员身份。</string>
     <key>NSInputMonitoringUsageDescription</key>
     <string>Bento 需要输入监控权限，以区分触控板手势与鼠标滚轮，并独立控制滚动方向。</string>
 </dict>
