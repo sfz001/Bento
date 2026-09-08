@@ -89,7 +89,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         screenCtl.restoreDock()
         screenCtl.restoreDisplaySettings()
         screenCtl.restore()
-        // Dock 还原是异步的，等它落地再让进程走，否则 Dock 会永远停在左边
+        // Dock 还原最多等待 2 秒；超时由下次启动按快照补偿。
         screenCtl.waitForPendingDockWork()
     }
 

@@ -159,6 +159,15 @@ struct MirrorRestoreTests {
         precondition(ScreenController.refreshRateMatches(0, current: 0))
         precondition(!ScreenController.refreshRateMatches(60, current: 0))
         precondition(!ScreenController.refreshRateMatches(.nan, current: 60))
-        print("PASS: display restore, snapshot ownership and refresh-rate regressions")
+        let dockQueue = DispatchQueue(label: "test.blocked-dock")
+        let unblock = DispatchSemaphore(value: 0)
+        dockQueue.async { unblock.wait() }
+        let bounded = ScreenController(dockQueue: dockQueue)
+        let began = ProcessInfo.processInfo.systemUptime
+        precondition(!bounded.waitForPendingDockWork(timeout: 0.03))
+        precondition(ProcessInfo.processInfo.systemUptime - began < 0.5)
+        unblock.signal()
+        precondition(bounded.waitForPendingDockWork(timeout: 1))
+        print("PASS: display restore, snapshot ownership, refresh-rate and bounded Dock wait regressions")
     }
 }

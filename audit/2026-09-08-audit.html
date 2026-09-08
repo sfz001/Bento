@@ -180,7 +180,7 @@
     <a href="#open">待处理</a>
     <a href="#sound">判定稳妥的部分</a>
     <a href="#evidence">附录：证据</a>
-    <a href="#fixed">已修复 · 15 项</a>
+    <a href="#fixed">已修复 · 16 项</a>
   </nav>
 
   <main>
@@ -215,8 +215,8 @@
         <div class="tile" data-k="high"><div class="n">3</div><div class="l">高</div></div>
         <div class="tile" data-k="medium"><div class="n">9</div><div class="l">中</div></div>
         <div class="tile" data-k="low"><div class="n">16</div><div class="l">低 / 提示</div></div>
-        <div class="tile" data-k="done"><div class="n">15</div><div class="l">已完整修复</div></div>
-        <div class="tile" data-k="open"><div class="n">15</div><div class="l">待完成 · 含 2 项部分修复</div></div>
+        <div class="tile" data-k="done"><div class="n">16</div><div class="l">已完整修复</div></div>
+        <div class="tile" data-k="open"><div class="n">14</div><div class="l">待完成 · 含 2 项部分修复</div></div>
       </div>
       <div class="actions">
         <div class="eyebrow">待处理项里建议优先的三件</div>
@@ -250,7 +250,7 @@
 
     <section id="status">
       <h2>发现总览</h2>
-      <p class="prose" style="color:var(--muted)">共 30 项：15 项完整修复，2 项部分修复，13 项待处理。未完成项优先展示，已修复行置灰、划线并排在表格末尾。</p>
+      <p class="prose" style="color:var(--muted)">共 30 项：16 项完整修复，2 项部分修复，12 项待处理。未完成项优先展示，已修复行置灰、划线并排在表格末尾。</p>
       <div class="table-wrap">
         <table>
           <thead><tr><th>编号</th><th>严重度</th><th>状态</th><th>提交</th><th>问题</th></tr></thead>
@@ -258,7 +258,7 @@
             <tr data-status="partial"><td class="nw"><a href="#X-7">X-7</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="partial">部分修复</span></td><td class="nw mono">3db76ad</td><td>文档与代码不符（CLAUDE.md 已更正，README 仍有漂移）</td></tr>
             <tr data-status="partial"><td class="nw"><a href="#X-2">X-2</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="partial">部分修复</span></td><td class="nw mono">a9e6afb</td><td>已补镜像恢复测试，完整熄屏流程仍缺演练入口</td></tr>
             <tr><td class="nw"><a href="#X-8">X-8</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>熄屏本身不留日志痕迹，事后无法确认屏幕是否真的黑过</td></tr>
-            <tr><td class="nw"><a href="#minor">其余 9 条</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>体验瑕疵与工程卫生，见「零散项」</td></tr>
+            <tr><td class="nw"><a href="#minor">其余 8 条</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>体验瑕疵与工程卫生，见「零散项」</td></tr>
             <tr><td class="nw"><a href="#icons">图标模块 3 项</a></td><td class="nw"><span class="chip" data-sev="info">提示</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>已停用的图标管理模块，重新启用前需处理</td></tr>
             <tr data-status="done"><td class="nw"><a href="#M-1">M-1</a></td><td class="nw"><span class="chip" data-sev="critical">严重</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">b17e1b2</td><td>硬件镜像组里 <code>CGDisplayMirrorsDisplay</code> 恒为 0，镜像永远拆不掉且快照被清</td></tr>
             <tr data-status="done"><td class="nw"><a href="#R-1">R-1</a></td><td class="nw"><span class="chip" data-sev="critical">严重</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">f480791</td><td>netstat 在 macOS 27 输出空表，屏幕共享探测永久失效且无 UI 提示</td></tr>
@@ -275,6 +275,7 @@
             <tr data-status="done"><td class="nw"><a href="#T-2">T-2</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：T-2</td><td>甩动手势按几何判定，浏览器标签页拖拽会误触发最大化</td></tr>
             <tr data-status="done"><td class="nw"><a href="#X-1">X-1</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：X-1</td><td>Swift 运行时 trap 不进 error.log</td></tr>
             <tr data-status="done"><td class="nw"><a href="#R-9">R-9</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：R-9</td><td>目标分辨率同时匹配当前刷新率，并优先选择差值最小的模式；0 Hz 动态/未知刷新率只与 0 匹配，没有合适模式则跳过切换</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#R-10">R-10</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：R-10</td><td>退出时等待 Dock 队列设置 2 秒总预算；超时正常退出并保留已有快照，下次启动补偿</td></tr>
           </tbody>
         </table>
       </div>
@@ -335,7 +336,6 @@
             <tr><td class="nw">T-3</td><td class="nw mono">WindowTiling</td><td>显示器参数一变就丢弃未保存的布局编辑。显示器休眠唤醒也会发这个通知。保留工作副本，只在屏幕集合真的变了时才关闭。</td></tr>
             <tr><td class="nw">T-4</td><td class="nw mono">WindowTiling</td><td>编辑器的本地键盘监听拦截整个进程的 Esc 与回车。判断当前键窗口再处理。</td></tr>
             <tr><td class="nw">T-5</td><td class="nw mono">WindowTiling</td><td>负缓存键只防非有限坐标，超大有限值仍会在 <code>Int()</code> 处 trap。先钳制再转换。</td></tr>
-            <tr><td class="nw">R-10</td><td class="nw mono">AppDelegate · ScreenController</td><td>退出时同步等待 Dock 队列，最坏约五十秒，注销与关机会被拖慢。给一个总预算，超时放行，下次启动的崩溃恢复会补救。</td></tr>
             <tr><td class="nw">X-3</td><td class="nw mono">Support</td><td>ErrorLog 没有按消息限速。当前日志里 97% 的行是同一条重复。按消息模板做限速，恢复时补一行「重复 N 次」。</td></tr>
             <tr><td class="nw">X-5</td><td class="nw mono">build_app.sh</td><td>CFBundleVersion 固定 1.0，无法区分构建。写入短提交号，启动时记一行。</td></tr>
             <tr><td class="nw">X-6</td><td class="nw mono">build_app.sh</td><td>缺 NSAppleEventsUsageDescription，而 FileVault 免密重启经 osascript 控制终端。加上无副作用。</td></tr>
@@ -423,7 +423,7 @@ CGCompleteDisplayConfiguration: err 1014 (1 块)
     </section>
 
     <section id="fixed">
-      <h2>已修复 · 15 项</h2>
+      <h2>已修复 · 16 项</h2>
       <p class="prose" style="color:var(--muted)">以下条目已对照当前代码确认完成，移至报告底部归档。标题加删除线，正文与标签置灰；修复依据保留供追溯。部分修复项仍在待处理区。</p>
 
       <article class="finding" data-status="done" id="M-1" data-sev="critical">
@@ -568,6 +568,12 @@ CGCompleteDisplayConfiguration: err 1014 (1 块)
         <div class="head"><span class="chip" data-st="done">已修复</span><span class="id">R-9</span><h3>目标分辨率同时匹配当前刷新率，并优先选择差值最小的模式；0 Hz 动态/未知刷新率只与 0 匹配，没有合适模式则跳过切换</h3></div>
         <div class="kv"><div class="k">原问题</div><div class="v">目标模式取列表第一个匹配，不比对当前刷新率。加入刷新率条件。</div>
           <div class="k">本次修复</div><div class="v">目标分辨率同时匹配当前刷新率，并优先选择差值最小的模式；0 Hz 动态/未知刷新率只与 0 匹配，没有合适模式则跳过切换。60/120 Hz、59.94 Hz、动态刷新率与非有限值回归通过。</div></div>
+      </article>
+
+      <article class="finding" data-status="done" id="R-10" data-sev="low">
+        <div class="head"><span class="chip" data-st="done">已修复</span><span class="id">R-10</span><h3>退出时等待 Dock 队列设置 2 秒总预算；超时正常退出并保留已有快照，下次启动补偿</h3></div>
+        <div class="kv"><div class="k">原问题</div><div class="v">退出时同步等待 Dock 队列，最坏约五十秒，注销与关机会被拖慢。给一个总预算，超时放行，下次启动的崩溃恢复会补救。</div>
+          <div class="k">本次修复</div><div class="v">退出时等待 Dock 队列设置 2 秒总预算；超时正常退出并保留已有快照，下次启动补偿。阻塞队列超时与解除阻塞后正常排空的回归通过，类型检查通过。</div></div>
       </article>
     </section>
 

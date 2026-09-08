@@ -504,7 +504,11 @@ class ScreenController {
     // 断开时还原"的先后顺序）。savedDock* 与快照读写也一并只在这个队列上进行。
     // 退出路径必须 waitForPendingDockWork()：否则进程先死，Dock 永远停在左边。
 
-    private let dockQueue = DispatchQueue(label: "com.sz.bento.dock")
+    private let dockQueue: DispatchQueue
+
+    init(dockQueue: DispatchQueue = DispatchQueue(label: "com.sz.bento.dock")) {
+        self.dockQueue = dockQueue
+    }
     private var savedDockOrientation: String?
     private var savedDockAutohide: Bool?
     private let dockSnapshotDefaultsKey = "BentoDockSnapshot"
@@ -522,9 +526,14 @@ class ScreenController {
         dockQueue.async { self.restoreDockSync() }
     }
 
-    /// 排空队列。退出/终止路径调用，等 Dock 真的还原完再走
-    func waitForPendingDockWork() {
-        dockQueue.sync {}
+    /// 退出只给队列有限预算；超时不清快照，下次启动接着恢复。
+    @discardableResult
+    func waitForPendingDockWork(timeout: TimeInterval = 2) -> Bool {
+        let drained = DispatchSemaphore(value: 0)
+        dockQueue.async { drained.signal() }
+        let completed = drained.wait(timeout: .now() + timeout) == .success
+        if !completed { ErrorLog.log("Dock: 退出恢复等待超时，保留快照供下次启动恢复") }
+        return completed
     }
 
     private func saveDockAndSetLeftSync() {
