@@ -140,17 +140,16 @@ class ScrollReverser {
         }
     }
 
-    /// Returns true if the event taps were created. Returns false when the user
-    /// still needs to grant Accessibility/Input Monitoring permission and relaunch.
-    func start() -> Bool {
+    /// 启动与用户手动重试可提示授权；睡眠唤醒等自动恢复必须静默。
+    func start(promptForPermissions: Bool = true) -> Bool {
         stop()
         touching = 0
         lastTouchTime = 0
         lastSource = .mouse
 
-        let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+        let options = ["AXTrustedCheckOptionPrompt": promptForPermissions] as CFDictionary
         let trusted = AXIsProcessTrustedWithOptions(options)
-        _ = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+        if promptForPermissions { _ = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent) }
 
         let scrollMask: CGEventMask = 1 << CGEventType.scrollWheel.rawValue
         let gestureMask: CGEventMask = 1 << gestureEventType.rawValue
@@ -189,7 +188,7 @@ class ScrollReverser {
             center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 guard let self, self.activeTap != nil else { return }
                 NSLog("ScrollReverser: rebuilding tap after wake/session-active")
-                if !self.start() {
+                if !self.start(promptForPermissions: false) {
                     ErrorLog.log("滚动反转: 唤醒后重建 event tap 失败，功能已停用")
                     self.onTapRebuildFailed?()
                 }
