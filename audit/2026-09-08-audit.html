@@ -180,7 +180,7 @@
     <a href="#open">待处理</a>
     <a href="#sound">判定稳妥的部分</a>
     <a href="#evidence">附录：证据</a>
-    <a href="#fixed">已修复 · 26 项</a>
+    <a href="#fixed">已修复 · 27 项</a>
   </nav>
 
   <main>
@@ -215,8 +215,8 @@
         <div class="tile" data-k="high"><div class="n">3</div><div class="l">高</div></div>
         <div class="tile" data-k="medium"><div class="n">9</div><div class="l">中</div></div>
         <div class="tile" data-k="low"><div class="n">16</div><div class="l">低 / 提示</div></div>
-        <div class="tile" data-k="done"><div class="n">26</div><div class="l">已完整修复</div></div>
-        <div class="tile" data-k="open"><div class="n">4</div><div class="l">待完成 · 含 2 项部分修复</div></div>
+        <div class="tile" data-k="done"><div class="n">27</div><div class="l">已完整修复</div></div>
+        <div class="tile" data-k="open"><div class="n">3</div><div class="l">待完成 · 含 2 项部分修复</div></div>
       </div>
       <div class="actions">
         <div class="eyebrow">待处理项里建议优先的三件</div>
@@ -250,14 +250,14 @@
 
     <section id="status">
       <h2>发现总览</h2>
-      <p class="prose" style="color:var(--muted)">共 30 项：26 项完整修复，2 项部分修复，2 项待处理。未完成项优先展示，已修复行置灰、划线并排在表格末尾。</p>
+      <p class="prose" style="color:var(--muted)">共 30 项：27 项完整修复，2 项部分修复，1 项待处理。未完成项优先展示，已修复行置灰、划线并排在表格末尾。</p>
       <div class="table-wrap">
         <table>
           <thead><tr><th>编号</th><th>严重度</th><th>状态</th><th>提交</th><th>问题</th></tr></thead>
           <tbody>
             <tr data-status="partial"><td class="nw"><a href="#X-7">X-7</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="partial">部分修复</span></td><td class="nw mono">3db76ad</td><td>文档与代码不符（CLAUDE.md 已更正，README 仍有漂移）</td></tr>
             <tr data-status="partial"><td class="nw"><a href="#X-2">X-2</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="partial">部分修复</span></td><td class="nw mono">a9e6afb</td><td>已补镜像恢复测试，完整熄屏流程仍缺演练入口</td></tr>
-            <tr><td class="nw"><a href="#icons">图标模块 2 项</a></td><td class="nw"><span class="chip" data-sev="info">提示</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>已停用的图标管理模块，重新启用前需处理</td></tr>
+            <tr><td class="nw"><a href="#icons">图标模块 1 项</a></td><td class="nw"><span class="chip" data-sev="info">提示</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>已停用的图标管理模块，重新启用前需处理</td></tr>
             <tr data-status="done"><td class="nw"><a href="#M-1">M-1</a></td><td class="nw"><span class="chip" data-sev="critical">严重</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">b17e1b2</td><td>硬件镜像组里 <code>CGDisplayMirrorsDisplay</code> 恒为 0，镜像永远拆不掉且快照被清</td></tr>
             <tr data-status="done"><td class="nw"><a href="#R-1">R-1</a></td><td class="nw"><span class="chip" data-sev="critical">严重</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">f480791</td><td>netstat 在 macOS 27 输出空表，屏幕共享探测永久失效且无 UI 提示</td></tr>
             <tr data-status="done"><td class="nw"><a href="#R-2">R-2</a></td><td class="nw"><span class="chip" data-sev="high">高</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">3db76ad</td><td>分辨率切换无门槛，会把外接主屏切走（实测已发生）</td></tr>
@@ -284,6 +284,7 @@
             <tr data-status="done"><td class="nw"><a href="#X-5">X-5</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：X-5</td><td>CFBundleVersion 写入 Git 提交计数，另存短提交号、未提交改动标志与 UTC 构建时间；启动同步写入日志，可明确识别运行的是哪份构建</td></tr>
             <tr data-status="done"><td class="nw"><a href="#X-6">X-6</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：X-6</td><td>Info.plist 补充中文 NSAppleEventsUsageDescription，说明仅在用户选择 FileVault 免密重启时控制终端，命令仍需管理员身份确认</td></tr>
             <tr data-status="done"><td class="nw"><a href="#I-1">I-1</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：I-1</td><td>删除 chevron 点击前无条件投递的全局 ESC，避免取消前台对话框和输入法候选；菜单拦截点击时交由现有结果校验及有限重试处理</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#I-2">I-2</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：I-2</td><td>系统模块名称同时按中英文逗号截断并去掉首尾空白，空名称回退到模块名；启用后的刷新还会清理旧 module 缓存，第三方应用名称不受影响</td></tr>
           </tbody>
         </table>
       </div>
@@ -344,7 +345,6 @@
         <table>
           <thead><tr><th>编号</th><th>问题</th></tr></thead>
           <tbody>
-            <tr><td class="nw">I-2</td><td>持久化的名字缓存按中文全角逗号截断，系统模块的描述用的是英文逗号，截断没生效。实证：<code>module:WiFi</code> 存成了 <code>"Wi‑Fi, connected, 3 bars"</code>，信号格数被写进了磁盘。</td></tr>
             <tr><td class="nw">I-3</td><td>没有隐藏项时「溢出条是否展开」返回真，导致顺序采纳与真实布局校验被永久跳过，清单顺序会与真实菜单栏脱节。应把「无按钮」与「已展开」分成两个返回值。</td></tr>
           </tbody>
         </table>
@@ -415,7 +415,7 @@ CGCompleteDisplayConfiguration: err 1014 (1 块)
     </section>
 
     <section id="fixed">
-      <h2>已修复 · 26 项</h2>
+      <h2>已修复 · 27 项</h2>
       <p class="prose" style="color:var(--muted)">以下条目已对照当前代码确认完成，移至报告底部归档。标题加删除线，正文与标签置灰；修复依据保留供追溯。部分修复项仍在待处理区。</p>
 
       <article class="finding" data-status="done" id="M-1" data-sev="critical">
@@ -629,6 +629,12 @@ CGCompleteDisplayConfiguration: err 1014 (1 块)
         <div class="head"><span class="chip" data-st="done">已修复</span><span class="id">I-1</span><h3>删除 chevron 点击前无条件投递的全局 ESC，避免取消前台对话框和输入法候选；菜单拦截点击时交由现有结果校验及有限重试处理</h3></div>
         <div class="kv"><div class="k">原问题</div><div class="v">合成点击前会向系统投递一次 ESC 按键，会发给当前前台 App，可能取消正在编辑的对话框或输入法候选。应只在检测到状态项菜单确实打开时才发。</div>
           <div class="k">本次修复</div><div class="v">删除 chevron 点击前无条件投递的全局 ESC，避免取消前台对话框和输入法候选；菜单拦截点击时交由现有结果校验及有限重试处理。类型检查通过，图标模块保持停用。</div></div>
+      </article>
+
+      <article class="finding" data-status="done" id="I-2" data-sev="low">
+        <div class="head"><span class="chip" data-st="done">已修复</span><span class="id">I-2</span><h3>系统模块名称同时按中英文逗号截断并去掉首尾空白，空名称回退到模块名；启用后的刷新还会清理旧 module 缓存，第三方应用名称不受影响</h3></div>
+        <div class="kv"><div class="k">原问题</div><div class="v">持久化的名字缓存按中文全角逗号截断，系统模块的描述用的是英文逗号，截断没生效。实证：<code>module:WiFi</code> 存成了 <code>"Wi‑Fi, connected, 3 bars"</code>，信号格数被写进了磁盘。</div>
+          <div class="k">本次修复</div><div class="v">系统模块名称同时按中英文逗号截断并去掉首尾空白，空名称回退到模块名；启用后的刷新还会清理旧 module 缓存，第三方应用名称不受影响。中英文、空串和前导逗号回归通过，模块保持停用。</div></div>
       </article>
     </section>
 

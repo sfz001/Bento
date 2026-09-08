@@ -447,8 +447,7 @@ class MenuBarIconManager: NSObject {
                 continue
             }
             // desc 可能带实时状态（"Wi‑Fi，已接入，3格"），截到第一个逗号
-            let clean = desc.split(separator: "，").first.map(String.init) ?? desc
-            let display = clean.isEmpty ? name : clean
+            let display = MenuBarSemantics.stableModuleName(desc, fallback: name)
             out.append(LiveItem(key: entryKey, displayName: display, stableName: display,
                                 entryKeys: [entryKey], frame: frame))
         }
@@ -606,6 +605,10 @@ class MenuBarIconManager: NSObject {
         if order != iconOrder { iconOrder = order }
         // 名字缓存（App 退出后隐藏行还得有名字）：只存稳定名，行情/角标这类易变文本不进磁盘
         var names = iconNames
+        // 启用后也清理旧缓存中的动态状态；第三方 App 的合法逗号名称保持原样。
+        for (key, value) in iconNames where key.hasPrefix("module:") {
+            names[key] = MenuBarSemantics.stableModuleName(value, fallback: String(key.dropFirst(7)))
+        }
         for item in items { names[item.key] = item.stableName }
         if names != iconNames { iconNames = names }
 
