@@ -546,7 +546,7 @@ class MenuBarIconManager: NSObject {
         // 字典模式的位置源 = 字典位置值（越大越靠左）；拖拽模式 = 收起态真实 frame 的 x
         // （左小右大，与 chevron 相交的沉底鬼影剔除）。
         // 溢出条展开时（用户点开了「«」）frame 是展开态布局，不作为采纳依据——顺序会错乱
-        let stripExpandedNow = isStripExpanded()
+        let canInspectCollapsed = stripState().allowsCollapsedLayout
         let mainWidth = CGDisplayBounds(CGMainDisplayID()).width
         let placed: [(key: String, pos: Double)]
         let posDescending: Bool
@@ -562,7 +562,7 @@ class MenuBarIconManager: NSObject {
             }
             posDescending = true
         }
-        if !skipAdoption, !stripExpandedNow {
+        if !skipAdoption, canInspectCollapsed {
             // 可见图标按位置排序 = 左→右；只重排 iconOrder 中这些键的相对顺序
             let newVisibleOrder = placed.filter { !hiddenKeys.contains($0.key) }
                 .sorted { posDescending ? $0.pos > $1.pos : $0.pos < $1.pos }.map(\.key)
@@ -595,7 +595,7 @@ class MenuBarIconManager: NSObject {
         for item in items where !order.contains(item.key) { order.append(item.key) }
         // 拖拽模式的新键按真实 membership 初始化意图（在栏=可见，沉底=隐藏）：Beta 5 字典
         // 不再反映真实布局，没有历史意图的图标（比如系统刚冒出来的模块）不能默认弹到栏上
-        if lever == .drag, !stripExpandedNow {
+        if lever == .drag, canInspectCollapsed {
             for item in items where !iconOrder.contains(item.key) && !hiddenKeys.contains(item.key) {
                 if !onBarCollapsed(item.frame, chevron: chevronFrame, mainWidth: mainWidth) {
                     hiddenKeys.insert(item.key)
@@ -626,7 +626,7 @@ class MenuBarIconManager: NSObject {
         // 显示器休眠时 agent 的 AX 树整体为空（实测：窗口在、无子元素、frame 全无）——
         // 此时所有项都会被误判"沉底"，整夜做无意义纠偏。有任何一个 frame 才可信
         var realityForced = false
-        if stale, !stripExpandedNow, items.contains(where: { $0.frame != nil }) {
+        if stale, canInspectCollapsed, items.contains(where: { $0.frame != nil }) {
             // 收起态溢出项的 frame 是堆叠在「«」按钮矩形上的鬼影（看起来完全"在栏上"，
             // y=5、x 合理）——与 chevron 相交即视为沉底，不算在栏（宽图标横跨 chevron
             // 的例外见 onBarCollapsed）。「«」不存在（无溢出）时按无鬼影处理
@@ -884,37 +884,15 @@ class MenuBarIconManager: NSObject {
         return agentElements().first { $0.role == "AXButton" && $0.desc == wanted }?.frame
     }
 
-    /// 溢出条是否处于展开态：出现「隐藏菜单栏项目」（收起按钮）即展开。
-    /// 没有任何隐藏项时系统不显示 chevron——没有展开/收起之分，视为已展开
-    private func isStripExpanded() -> Bool {
-        guard let mba = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.MenuBarAgent").first
-        else { return false }
-        let app = AXUIElementCreateApplication(mba.processIdentifier)
-        var windowsV: AnyObject?
-        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsV) == .success,
-              let wins = windowsV as? [AXUIElement] else { return false }
-        var hasChevron = false
-        var expanded = false
-        for w in wins {
-            func walk(_ el: AXUIElement, _ depth: Int) {
-                guard depth <= 6, !expanded else { return }
-                var roleV: AnyObject?, descV: AnyObject?
-                AXUIElementCopyAttributeValue(el, kAXRoleAttribute as CFString, &roleV)
-                AXUIElementCopyAttributeValue(el, kAXDescriptionAttribute as CFString, &descV)
-                if roleV as? String == "AXButton", let d = descV as? String {
-                    if d == "显示隐藏菜单栏项目" { hasChevron = true; return }
-                    if d == "隐藏菜单栏项目" { hasChevron = true; expanded = true; return }
-                }
-                if depth > 0, roleV as? String == "AXApplication" { return }
-                var children: AnyObject?
-                AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &children)
-                for kid in children as? [AXUIElement] ?? [] { walk(kid, depth + 1) }
-            }
-            walk(w, 0)
-            if expanded { break }
-        }
-        return !hasChevron || expanded
+    /// 明确区分无溢出、收起、展开与 AX 不可读，不能把无按钮当成已展开。
+    private func stripState() -> MenuBarStripState {
+        let elements = agentElements().filter { $0.role == "AXButton" || $0.role == "AXMenuBarItem" }
+        return MenuBarSemantics.stripState(
+            buttonDescriptions: elements.filter { $0.role == "AXButton" }.map(\.desc),
+            hasLiveItems: !elements.isEmpty)
     }
+
+    private func isStripExpanded() -> Bool { stripState() == .expanded }
 
     /// 合成坐标点击（chevron 展开/收起专用；frame 由 chevronRect 现读现用）。
     /// 不发送全局 ESC：它可能取消前台应用对话框或输入法候选。
@@ -967,21 +945,17 @@ class MenuBarIconManager: NSObject {
         }
     }
 
-    /// 展开溢出条（需要时）。没有 chevron（无隐藏项）视为无需展开。
-    /// 每次点击前先投一个 ESC：误投的 up 可能点开某个状态项菜单（悬浮在菜单栏上），
-    /// 打开着的菜单会吞掉后续 chevron 点击——ESC 关掉它再点
+    /// 无溢出条可直接拖动；AX 不可读必须停止，不能误判为无需展开。
     private func expandStrip() -> Bool {
-        if isStripExpanded() { return true }
         for attempt in 0..<3 {
-            guard let ch = chevronRect(true) else {
-                ErrorLog.log("图标管理: 展开点击 #\(attempt + 1)：找不到展开按钮，视为无需展开")
-                return true
-            }
+            let state = stripState()
+            if state.readyForDragging { return true }
+            guard state == .collapsed, let ch = chevronRect(true) else { return false }
             click(CGPoint(x: ch.midX, y: ch.midY))
             Thread.sleep(forTimeInterval: 1.5)
-            let exp = isStripExpanded()
-            ErrorLog.log("图标管理: 展开点击 #\(attempt + 1) chevron=(\(Int(ch.minX)),\(Int(ch.minY)),\(Int(ch.width))×\(Int(ch.height))) → 展开=\(exp)")
-            if exp { return true }
+            let result = stripState()
+            ErrorLog.log("图标管理: 展开点击 #\(attempt + 1) → \(result)")
+            if result.readyForDragging { return true }
         }
         return false
     }
