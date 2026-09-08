@@ -284,38 +284,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         pollTimer = nil
     }
 
-    /// 探测三态：进程 spawn 失败 / 看门狗超时杀都不是「没有连接」。
-    /// 原实现把一切失败折叠成 false——远程会话中一次瞬时故障就恢复亮屏 + 锁定，
-    /// 本地桌面直接暴露一个轮询周期，还把对面正在操作的会话打断
-    private enum ConnectionProbe {
-        case connected(String)
-        case disconnected
-        case unknown
-    }
+    private let connectionDetector = RemoteConnectionDetector()
 
-    private func probeRustDesk() -> ConnectionProbe {
-        switch runProcess("/usr/bin/pgrep", ["-fi", "rustdesk.*--cm"]).status {
-        case 0: return .connected("RustDesk")
-        case 1: return .disconnected // pgrep 语义：1 = 确定无匹配进程
-        default: return .unknown     // -1 spawn 失败 / 15 看门狗超时杀 / 其他
-        }
-    }
-
-    /// 屏幕共享（VNC）探测看进程而不是看端口：screensharingd 由 launchd 的 socket
-    /// 监听按需拉起——连接一被接受（早于密码认证）就启动，最后一个观看端断开约 15s
-    /// 后退出（2026-09-07 会话的统一日志实测，同会话的 ScreensharingAgent 生命周期相同）。
-    /// 所以 pgrep 的退出码语义和 RustDesk 那一路完全一样，断开确认只是多等这 15s。
-    /// 之前解析 `netstat -an -p tcp`：macOS 27（26A5425a）上 net.inet.tcp.pcblist*
-    /// 这组 sysctl 已经不存在，netstat 对任何非 root 进程都输出空表（沙箱内外一样），
-    /// 探测永远 unknown，屏幕共享会话从来没触发过熄屏——别改回去。
-    /// 必须 `-x` 精确匹配：RemoteManagement 的 ScreenSharingSubscriber 常驻，模糊匹配会误报
-    private func probeScreenSharing() -> ConnectionProbe {
-        switch runProcess("/usr/bin/pgrep", ["-x", "screensharingd"]).status {
-        case 0: return .connected("Screen Sharing")
-        case 1: return .disconnected
-        default: return .unknown
-        }
-    }
+    private func probeRustDesk() -> ConnectionProbe { connectionDetector.rustDesk() }
+    private func probeScreenSharing() -> ConnectionProbe { connectionDetector.screenSharing() }
 
     /// Runs on pollQueue: the pgrep spawns block, so they stay off the
     /// main thread; state changes are applied back on main.
@@ -388,7 +360,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let isBroken = after >= probeBrokenThreshold
         guard wasBroken != isBroken else { return }
         ErrorLog.log(isBroken
-            ? "远程检测: \(name) 探测连续 \(probeBrokenThreshold) 轮异常（pgrep 失败/超时），该来源的连接检测已失效，状态栏已标记"
+            ? "远程检测: \(name) 探测连续 \(probeBrokenThreshold) 轮异常（进程或认证检查失败/超时），该来源的连接检测已失效，状态栏已标记"
             : "远程检测: \(name) 探测已恢复")
         updateStatus()
     }

@@ -180,7 +180,7 @@
     <a href="#open">待处理</a>
     <a href="#sound">判定稳妥的部分</a>
     <a href="#evidence">附录：证据</a>
-    <a href="#fixed">已修复 · 11 项</a>
+    <a href="#fixed">已修复 · 12 项</a>
   </nav>
 
   <main>
@@ -215,8 +215,8 @@
         <div class="tile" data-k="high"><div class="n">3</div><div class="l">高</div></div>
         <div class="tile" data-k="medium"><div class="n">9</div><div class="l">中</div></div>
         <div class="tile" data-k="low"><div class="n">16</div><div class="l">低 / 提示</div></div>
-        <div class="tile" data-k="done"><div class="n">11</div><div class="l">已完整修复</div></div>
-        <div class="tile" data-k="open"><div class="n">19</div><div class="l">待完成 · 含 2 项部分修复</div></div>
+        <div class="tile" data-k="done"><div class="n">12</div><div class="l">已完整修复</div></div>
+        <div class="tile" data-k="open"><div class="n">18</div><div class="l">待完成 · 含 2 项部分修复</div></div>
       </div>
       <div class="actions">
         <div class="eyebrow">待处理项里建议优先的三件</div>
@@ -251,13 +251,12 @@
 
     <section id="status">
       <h2>发现总览</h2>
-      <p class="prose" style="color:var(--muted)">共 30 项：11 项完整修复，2 项部分修复，17 项待处理。未完成项优先展示，已修复行置灰、划线并排在表格末尾。</p>
+      <p class="prose" style="color:var(--muted)">共 30 项：12 项完整修复，2 项部分修复，16 项待处理。未完成项优先展示，已修复行置灰、划线并排在表格末尾。</p>
       <div class="table-wrap">
         <table>
           <thead><tr><th>编号</th><th>严重度</th><th>状态</th><th>提交</th><th>问题</th></tr></thead>
           <tbody>
             <tr data-status="partial"><td class="nw"><a href="#X-7">X-7</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="partial">部分修复</span></td><td class="nw mono">3db76ad</td><td>文档与代码不符（CLAUDE.md 已更正，README 仍有漂移）</td></tr>
-            <tr><td class="nw"><a href="#R-7">R-7</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>探测只看进程名，端口扫描即可触发熄屏与锁屏</td></tr>
             <tr><td class="nw"><a href="#T-2">T-2</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>甩动手势按几何判定，浏览器标签页拖拽会误触发最大化</td></tr>
             <tr><td class="nw"><a href="#X-1">X-1</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>Swift 运行时 trap 不进 error.log</td></tr>
             <tr data-status="partial"><td class="nw"><a href="#X-2">X-2</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="partial">部分修复</span></td><td class="nw mono">a9e6afb</td><td>已补镜像恢复测试，完整熄屏流程仍缺演练入口</td></tr>
@@ -275,6 +274,7 @@
             <tr data-status="done"><td class="nw"><a href="#R-4">R-4</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：R-4</td><td>先做镜像/分辨率/Dock 才压黑，重活期间桌面可见</td></tr>
             <tr data-status="done"><td class="nw"><a href="#R-5">R-5</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：R-5</td><td>施加与撤销顺序不是后进先出</td></tr>
             <tr data-status="done"><td class="nw"><a href="#R-6">R-6</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：R-6</td><td>分辨率快照的「不覆盖」规则不区分显示器</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#R-7">R-7</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：R-7</td><td>探测只看进程名，端口扫描即可触发熄屏与锁屏</td></tr>
           </tbody>
         </table>
       </div>
@@ -287,16 +287,6 @@
 
 
 
-      <article class="finding" id="R-7" data-sev="medium">
-        <div class="head"><span class="chip" data-sev="medium">中</span><span class="id">R-7</span><h3>探测只看进程名，端口扫描即可触发熄屏与锁屏</h3></div>
-        <div class="kv">
-          <div class="k">问题</div><div class="v"><ul>
-            <li><code>pgrep -fi "rustdesk.*--cm"</code> 匹配任意命令行含该模式的进程，本地进程改个名就能触发整条链路。</li>
-            <li><code>screensharingd</code> 在 TCP 连接被接受时、<b>认证之前</b>就被拉起。局域网里的扫描器、NAS、手机 App 探一次 5900 端口，本地正在工作的用户就会经历黑屏、镜像合并、Dock 挪走，约二十秒后被锁屏。</li>
-          </ul><p>这条在探测修好之后才真正有意义，此前那一路根本不会响应。</p></div>
-          <div class="k">建议</div><div class="v"><p>拿到 pid 后用 <code>proc_pidpath</code> 校验可执行文件路径。屏幕共享这一路可再叠一个「已认证会话」信号，或对连接建立也要求两轮确认，避免三秒内自结束的扫描触发整套动作。</p></div>
-        </div>
-      </article>
 
       <article class="finding" id="T-2" data-sev="medium">
         <div class="head"><span class="chip" data-sev="medium">中</span><span class="id">T-2</span><h3>甩动手势按几何判定，浏览器标签页拖拽会误触发最大化</h3></div>
@@ -449,7 +439,7 @@ CGCompleteDisplayConfiguration: err 1014 (1 块)
     </section>
 
     <section id="fixed">
-      <h2>已修复 · 11 项</h2>
+      <h2>已修复 · 12 项</h2>
       <p class="prose" style="color:var(--muted)">以下条目已对照当前代码确认完成，移至报告底部归档。标题加删除线，正文与标签置灰；修复依据保留供追溯。部分修复项仍在待处理区。</p>
 
       <article class="finding" data-status="done" id="M-1" data-sev="critical">
@@ -556,6 +546,18 @@ CGCompleteDisplayConfiguration: err 1014 (1 块)
           <div class="k">现状</div><div class="v"><p>内置屏门槛（R-2）让快照只可能属于内置屏，这条在当前代码下已很难触发，但规则本身仍不正确。</p></div>
           <div class="k">建议</div><div class="v"><p>比对快照里的 UUID 与本次目标显示器，属于别的显示器时拒绝切换本屏。</p></div>
           <div class="k">本次修复</div><div class="v"><p>切换前比对快照 UUID。属于其他显示器、无 UUID 的旧快照或损坏快照均不允许本次切换；读取不到当前模式也不改动。新增相同屏、不同屏、旧格式、损坏和无快照回归，全部通过。</p></div>
+        </div>
+      </article>
+
+      <article class="finding" data-status="done" id="R-7" data-sev="medium">
+        <div class="head"><span class="chip" data-st="done">已修复</span><span class="chip" data-sev="medium">中</span><span class="id">R-7</span><h3>探测只看进程名，端口扫描即可触发熄屏与锁屏</h3></div>
+        <div class="kv">
+          <div class="k">问题</div><div class="v"><ul>
+            <li><code>pgrep -fi "rustdesk.*--cm"</code> 匹配任意命令行含该模式的进程，本地进程改个名就能触发整条链路。</li>
+            <li><code>screensharingd</code> 在 TCP 连接被接受时、<b>认证之前</b>就被拉起。局域网里的扫描器、NAS、手机 App 探一次 5900 端口，本地正在工作的用户就会经历黑屏、镜像合并、Dock 挪走，约二十秒后被锁屏。</li>
+          </ul><p>这条在探测修好之后才真正有意义，此前那一路根本不会响应。</p></div>
+          <div class="k">建议</div><div class="v"><p>拿到 pid 后用 <code>proc_pidpath</code> 校验可执行文件路径。屏幕共享这一路可再叠一个「已认证会话」信号，或对连接建立也要求两轮确认，避免三秒内自结束的扫描触发整套动作。</p></div>
+          <div class="k">本次修复</div><div class="v"><p>RustDesk 校验内核返回的可执行文件路径和 --cm 参数；屏幕共享同时校验 Apple 守护进程路径、PID/启动时间和本次进程的认证成功日志。仅端口扫描不会触发。认证信号不可读或长期缺失进入探测告警。历史真实日志格式核验和注入式探测回归通过；新版端到端远程会话仍需复测。</p></div>
         </div>
       </article>
     </section>
