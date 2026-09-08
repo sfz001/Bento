@@ -154,6 +154,11 @@ struct MirrorRestoreTests {
         precondition(!owner.canChangeResolution(on: 1))
         precondition(owner.canChangeResolution(on: 1))
         UserDefaults.standard.removeObject(forKey: resolutionKey)
-        print("PASS: display restore and resolution snapshot ownership regressions")
+        precondition(ScreenController.refreshRateMatches(59.94, current: 60))
+        precondition(!ScreenController.refreshRateMatches(60, current: 120))
+        precondition(ScreenController.refreshRateMatches(0, current: 0))
+        precondition(!ScreenController.refreshRateMatches(60, current: 0))
+        precondition(!ScreenController.refreshRateMatches(.nan, current: 60))
+        print("PASS: display restore, snapshot ownership and refresh-rate regressions")
     }
 }

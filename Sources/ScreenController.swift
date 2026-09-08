@@ -379,6 +379,13 @@ class ScreenController {
         return true
     }
 
+    /// 0 表示动态/未报告刷新率，只能匹配同类模式，不能随意降为某个固定频率。
+    static func refreshRateMatches(_ candidate: Double, current: Double) -> Bool {
+        guard candidate.isFinite, current.isFinite, candidate >= 0, current >= 0 else { return false }
+        if candidate == 0 || current == 0 { return candidate == current }
+        return abs(candidate - current) < 0.5
+    }
+
     func switchResolution() {
         let main = CGMainDisplayID()
         // 1512×982 HiDPI 是 14" MacBook Pro 内置屏的模式，只对内置屏执行。外接屏的模式表里
@@ -393,9 +400,10 @@ class ScreenController {
 
         guard let modes = CGDisplayCopyAllDisplayModes(main, displayModeOptions) as? [CGDisplayMode] else { return }
 
-        let target = modes.first {
+        let target = modes.filter {
             $0.width == targetWidth && $0.height == targetHeight && $0.pixelWidth > $0.width
-        }
+                && Self.refreshRateMatches($0.refreshRate, current: currentMode.refreshRate)
+        }.min { abs($0.refreshRate - currentMode.refreshRate) < abs($1.refreshRate - currentMode.refreshRate) }
         guard let mode = target else {
             NSLog("Resolution mode \(targetWidth)x\(targetHeight) HiDPI not found, skipping")
             return
