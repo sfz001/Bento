@@ -744,7 +744,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func restoreExtendedDisplays() {
-        screenCtl.restoreExtendedDisplays()
+        guard let failure = screenCtl.restoreExtendedDisplays() else { return }
+        let alert = NSAlert()
+        alert.messageText = "未能恢复扩展显示器"
+        alert.informativeText = failure
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "好")
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
     }
 
     // MARK: - 分屏动作

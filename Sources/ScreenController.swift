@@ -41,11 +41,10 @@ class ScreenController {
         CGDisplayIsInMirrorSet(d) != 0
     }
 
-    /// 睡眠中的显示器无法重新配置：2026-09-08 实测，两块屏 CGDisplayIsActive=false 时
-    /// CGConfigureDisplayMirrorOfDisplay 逐个返回成功，CGCompleteDisplayConfiguration
-    /// 却整体失败（错误 1014）。此时必须保留快照等唤醒后重试，绝不能当成「已恢复」清掉
+    /// 只用睡眠标志判断是否需要延后恢复。硬件镜像中只有主屏 active，
+    /// 副屏即使醒着也 inactive；把 !active 当成睡眠会永久拦住解除镜像。
     private func anyDisplayAsleep(_ displays: [CGDirectDisplayID]) -> Bool {
-        displays.contains { CGDisplayIsAsleep($0) != 0 || CGDisplayIsActive($0) == 0 }
+        displays.contains { CGDisplayIsAsleep($0) != 0 }
     }
 
     /// 还有未完成的镜像恢复（快照仍在）。轮询的空闲支路据此重试——空闲清理本身是
@@ -114,23 +113,27 @@ class ScreenController {
         restoreMirrorState(snapshot)
     }
 
-    func restoreExtendedDisplays() {
+    /// nil 表示已恢复；失败原因交给菜单显示，自动恢复调用方可忽略返回值。
+    @discardableResult
+    func restoreExtendedDisplays() -> String? {
         let displays = onlineDisplays()
+        guard !displays.isEmpty else {
+            return "无法读取显示器列表，请稍后重试。"
+        }
         guard displays.count > 1 else {
-            clearMirrorSnapshot()
-            return
+            return "当前只检测到一块显示器，请确认另一块已连接并唤醒。"
         }
 
         guard !anyDisplayAsleep(displays) else {
             ErrorLog.log("镜像: 显示器处于睡眠，无法重新配置，本次跳过（唤醒后可再试）")
-            return
+            return "显示器处于睡眠状态，请唤醒所有显示器后重试。"
         }
 
         var config: CGDisplayConfigRef?
         let begin = CGBeginDisplayConfiguration(&config)
         guard begin == .success, config != nil else {
             NSLog("Mirroring begin failed with error \(begin.rawValue)")
-            return
+            return "无法开始恢复显示器（错误 \(begin.rawValue)），请稍后重试。"
         }
 
         // 判据用 isMirrored 而不是 CGDisplayMirrorsDisplay：见 isMirrored 的说明。
@@ -138,24 +141,38 @@ class ScreenController {
         var restored: [CGDirectDisplayID] = []
         let main = CGMainDisplayID()
         for d in displays where d != main && isMirrored(d) {
-            if CGConfigureDisplayMirrorOfDisplay(config, d, kCGNullDirectDisplay) == .success {
-                restored.append(d)
+            let error = CGConfigureDisplayMirrorOfDisplay(config, d, kCGNullDirectDisplay)
+            guard error == .success else {
+                CGCancelDisplayConfiguration(config)
+                ErrorLog.log("镜像: 显示器 \(d) 解除镜像失败（错误 \(error.rawValue)），保留快照")
+                return "无法解除显示器镜像（错误 \(error.rawValue)），请稍后重试。"
             }
+            restored.append(d)
         }
 
         guard !restored.isEmpty else {
             CGCancelDisplayConfiguration(config)
             clearMirrorSnapshot()
             NSLog("Mirroring already disabled")
-            return
+            return nil
         }
 
         let err = CGCompleteDisplayConfiguration(config, .forSession)
         if err == .success {
+            let currentDisplays = onlineDisplays()
+            guard Set(displays).isSubset(of: Set(currentDisplays)) else {
+                return "显示器连接状态发生变化，暂时无法确认恢复结果，请稍后重试。"
+            }
+            guard !currentDisplays.contains(where: { isMirrored($0) }) else {
+                ErrorLog.log("镜像: 系统接受了恢复请求，但显示器仍在镜像组，保留快照")
+                return "显示器仍处于镜像模式，请稍后重试或在系统设置中调整。"
+            }
             clearMirrorSnapshot()
             NSLog("Mirroring force-disabled for \(restored.count) display(s)")
+            return nil
         } else {
-            NSLog("Mirroring force-disable failed with error \(err.rawValue)")
+            ErrorLog.log("镜像: 恢复扩展显示器失败（错误 \(err.rawValue)），保留快照")
+            return "系统未能恢复扩展显示器（错误 \(err.rawValue)），请稍后重试。"
         }
     }
 
