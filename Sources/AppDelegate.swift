@@ -361,7 +361,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard wasBroken != isBroken else { return }
         ErrorLog.log(isBroken
             ? "远程检测: \(name) 探测连续 \(probeBrokenThreshold) 轮异常（进程或认证检查失败/超时），该来源的连接检测已失效，状态栏已标记"
-            : "远程检测: \(name) 探测已恢复")
+            : "远程检测: \(name) 探测已恢复", key: "probe-\(name)")
         updateStatus()
     }
 

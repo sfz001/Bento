@@ -75,9 +75,32 @@ enum ErrorLog {
         }
     }
 
-    static func log(_ message: String) {
-        NSLog("%@", message)
-        queue.async { write(message) }
+    private static var limiter = LogRateLimiter()
+    private static var repeatFlush: DispatchWorkItem?
+
+    static func log(_ message: String, key: String? = nil) {
+        queue.async {
+            for line in limiter.record(message, key: key, now: Date.timeIntervalSinceReferenceDate) {
+                NSLog("%@", line)
+                write(line)
+            }
+            scheduleRepeatFlush()
+        }
+    }
+
+    /// 没有新的消息时，也会在下一分钟落下最后一批重复次数。
+    private static func scheduleRepeatFlush() {
+        guard repeatFlush == nil, limiter.hasPendingRepeats else { return }
+        let work = DispatchWorkItem {
+            repeatFlush = nil
+            for line in limiter.flush(now: Date.timeIntervalSinceReferenceDate) {
+                NSLog("%@", line)
+                write(line)
+            }
+            scheduleRepeatFlush()
+        }
+        repeatFlush = work
+        queue.asyncAfter(deadline: .now() + 60, execute: work)
     }
 
     private static func write(_ message: String) {
