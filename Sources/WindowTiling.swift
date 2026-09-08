@@ -792,12 +792,16 @@ class LayoutEditorSession: NSObject {
         toolbar = panel
         // Esc 取消 / Return 保存（本地监听：编辑面是 key 窗口，工具条按钮的 keyEquivalent 接不到）
         escMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, let keyWindow = NSApp.keyWindow,
+                  self.windows.contains(where: { $0 === keyWindow }) || self.toolbar === keyWindow,
+                  event.window == nil || event.window === keyWindow,
+                  event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return event }
             if event.keyCode == 53 {
-                self?.end(save: false)
+                self.end(save: false)
                 return nil
             }
             if event.keyCode == 36 || event.keyCode == 76 { // Return / 小键盘 Enter
-                self?.end(save: true)
+                self.end(save: true)
                 return nil
             }
             return event
