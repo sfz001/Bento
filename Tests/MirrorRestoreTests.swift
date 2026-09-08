@@ -67,6 +67,12 @@ func runProcess(_ path: String, _ args: [String], captureOutput: Bool = false, t
     fatalError("Unexpected process launch in mirror test")
 }
 
+private final class RestoreOrderSpy: ScreenController {
+    var operations: [String] = []
+    override func disableMirroring(forceFallback: Bool = false) { operations.append("mirror") }
+    override func restoreResolution() { operations.append("resolution") }
+}
+
 @main
 struct MirrorRestoreTests {
     static func main() {
@@ -126,6 +132,18 @@ struct MirrorRestoreTests {
 
         precondition(preexisting.restoreExtendedDisplays() == nil)
         precondition(Displays.commits == 1, "Already extended must be a no-op")
-        print("PASS: 9 mirror restore regression scenarios")
+        let order = RestoreOrderSpy()
+        order.restoreDisplaySettings()
+        precondition(order.operations == ["mirror", "resolution"])
+
+        Displays.reset()
+        let resolutionKey = "BentoDisplayModeSnapshot"
+        let resolution = Data("{\"width\":1704,\"height\":959,\"pixelWidth\":3408,\"pixelHeight\":1918,\"refreshRate\":60,\"displayUUID\":\"test-1\"}".utf8)
+        UserDefaults.standard.set(resolution, forKey: resolutionKey)
+        ScreenController().restoreResolution()
+        precondition(UserDefaults.standard.data(forKey: resolutionKey) == resolution,
+                     "Mirrored display must retain original resolution snapshot")
+        UserDefaults.standard.removeObject(forKey: resolutionKey)
+        print("PASS: 11 mirror/display restore regression scenarios")
     }
 }

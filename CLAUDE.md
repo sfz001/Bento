@@ -107,3 +107,9 @@ File-scope `private`/`fileprivate` declarations don't cross these file boundarie
 - Bundle ID: `com.sz.bento`
 - Login start is owned by `SMAppService.mainApp` (menu toggle surfaces `.requiresApproval` as a distinct "待系统设置批准" state that deep-links to Login Items); the legacy LaunchAgent plist `~/Library/LaunchAgents/com.sz.bento.plist` is unloaded and deleted by a one-time migration on launch
 - Code signing (`build_app.sh`): self-signed identity in a dedicated keychain; the keychain password is random, stored only in gitignored `.bento-codesign/keychain-password` (0600) — a legacy hardcoded password lives in public git history, so old keychains are migrated in place via `set-keychain-password` (cert unchanged → TCC grants survive). Private key/p12 are deleted from disk after import (an EXIT trap covers failed runs). If the keychain exists but the identity can't be found, the script REFUSES to rebuild (that would rotate the cert and void Accessibility/Input Monitoring grants) unless `BENTO_REBUILD_CODESIGN=1`
+
+## 审计修复后的显示恢复顺序
+
+- 连接先压黑，再于镜像前保存内置屏分辨率快照，然后镜像、切分辨率、调整 Dock，最后重压 gamma。
+- 恢复先提交 Dock 还原任务、拆除 Bento 镜像，再恢复原始分辨率，最后撤黑。镜像或睡眠期间不丢弃分辨率快照；读取模式列表失败也保留。
+- 启动恢复包含镜像，不依赖远程监控开关；空闲轮询同时重试镜像和分辨率。恢复期间屏幕通知不再重新合并显示器。

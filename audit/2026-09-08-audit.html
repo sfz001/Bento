@@ -180,7 +180,7 @@
     <a href="#open">待处理</a>
     <a href="#sound">判定稳妥的部分</a>
     <a href="#evidence">附录：证据</a>
-    <a href="#fixed">已修复 · 9 项</a>
+    <a href="#fixed">已修复 · 10 项</a>
   </nav>
 
   <main>
@@ -215,8 +215,8 @@
         <div class="tile" data-k="high"><div class="n">3</div><div class="l">高</div></div>
         <div class="tile" data-k="medium"><div class="n">9</div><div class="l">中</div></div>
         <div class="tile" data-k="low"><div class="n">16</div><div class="l">低 / 提示</div></div>
-        <div class="tile" data-k="done"><div class="n">9</div><div class="l">已完整修复</div></div>
-        <div class="tile" data-k="open"><div class="n">21</div><div class="l">待完成 · 含 2 项部分修复</div></div>
+        <div class="tile" data-k="done"><div class="n">10</div><div class="l">已完整修复</div></div>
+        <div class="tile" data-k="open"><div class="n">20</div><div class="l">待完成 · 含 2 项部分修复</div></div>
       </div>
       <div class="actions">
         <div class="eyebrow">待处理项里建议优先的三件</div>
@@ -251,13 +251,12 @@
 
     <section id="status">
       <h2>发现总览</h2>
-      <p class="prose" style="color:var(--muted)">共 30 项：9 项完整修复，2 项部分修复，19 项待处理。未完成项优先展示，已修复行置灰、划线并排在表格末尾。</p>
+      <p class="prose" style="color:var(--muted)">共 30 项：10 项完整修复，2 项部分修复，18 项待处理。未完成项优先展示，已修复行置灰、划线并排在表格末尾。</p>
       <div class="table-wrap">
         <table>
           <thead><tr><th>编号</th><th>严重度</th><th>状态</th><th>提交</th><th>问题</th></tr></thead>
           <tbody>
             <tr data-status="partial"><td class="nw"><a href="#X-7">X-7</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="partial">部分修复</span></td><td class="nw mono">3db76ad</td><td>文档与代码不符（CLAUDE.md 已更正，README 仍有漂移）</td></tr>
-            <tr><td class="nw"><a href="#R-5">R-5</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>施加与撤销顺序不是后进先出</td></tr>
             <tr><td class="nw"><a href="#R-6">R-6</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>分辨率快照的「不覆盖」规则不区分显示器</td></tr>
             <tr><td class="nw"><a href="#R-7">R-7</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>探测只看进程名，端口扫描即可触发熄屏与锁屏</td></tr>
             <tr><td class="nw"><a href="#T-2">T-2</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>甩动手势按几何判定，浏览器标签页拖拽会误触发最大化</td></tr>
@@ -275,6 +274,7 @@
             <tr data-status="done"><td class="nw"><a href="#R-8">R-8</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">3db76ad</td><td>探测健康度只进日志不进界面</td></tr>
             <tr data-status="done"><td class="nw"><a href="#X-4">X-4</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">3db76ad</td><td>单实例守卫静默退出，新构建装上却起不来</td></tr>
             <tr data-status="done"><td class="nw"><a href="#R-4">R-4</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：R-4</td><td>先做镜像/分辨率/Dock 才压黑，重活期间桌面可见</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#R-5">R-5</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：R-5</td><td>施加与撤销顺序不是后进先出</td></tr>
           </tbody>
         </table>
       </div>
@@ -285,17 +285,6 @@
       <h2>待处理</h2>
 
 
-      <article class="finding" id="R-5" data-sev="medium">
-        <div class="head"><span class="chip" data-sev="medium">中</span><span class="id">R-5</span><h3>施加与撤销顺序不是后进先出</h3></div>
-        <div class="kv">
-          <div class="k">问题</div><div class="v"><ul>
-            <li>分辨率快照是在开启镜像<b>之后</b>读的。若镜像组把主屏调到公共模式，记录的「原始模式」就是镜像后的模式。</li>
-            <li>恢复时显示器还在镜像组里，组内可用模式列表可能不含原模式，此时代码会永久丢弃快照。</li>
-            <li>崩溃恢复路径只回滚分辨率与 Dock，镜像要等首轮轮询；若远程熄屏总开关是关的，镜像残留没有自动清理。</li>
-          </ul><p>本机两块显示器型号相同，镜像不改变模式列表，当前不会触发；接不同型号显示器时会。</p></div>
-          <div class="k">建议</div><div class="v"><p>施加顺序改为快照分辨率、镜像、分辨率、Dock；撤销严格反序。显示器在镜像组里时不要以「模式不在列表」为由丢弃快照，只推迟。崩溃恢复里一并解除镜像。</p></div>
-        </div>
-      </article>
 
       <article class="finding" id="R-6" data-sev="medium">
         <div class="head"><span class="chip" data-sev="medium">中</span><span class="id">R-6</span><h3>分辨率快照的「不覆盖」规则不区分显示器</h3></div>
@@ -468,7 +457,7 @@ CGCompleteDisplayConfiguration: err 1014 (1 块)
     </section>
 
     <section id="fixed">
-      <h2>已修复 · 9 项</h2>
+      <h2>已修复 · 10 项</h2>
       <p class="prose" style="color:var(--muted)">以下条目已对照当前代码确认完成，移至报告底部归档。标题加删除线，正文与标签置灰；修复依据保留供追溯。部分修复项仍在待处理区。</p>
 
       <article class="finding" data-status="done" id="M-1" data-sev="critical">
@@ -552,6 +541,19 @@ CGCompleteDisplayConfiguration: err 1014 (1 块)
           <div class="k">问题</div><div class="v"><p>顺序是镜像、分辨率、Dock，最后才 <code>setBlack()</code>。这些是同步的显示重配置与五个子进程创建。实测 02:56 那次，从连接被接受到 Dock 重启用了约三秒，期间屏幕黑闪、重排，真实桌面对旁人可见。gamma 压黑本身是即时且廉价的。</p></div>
           <div class="k">建议</div><div class="v"><p>先 <code>setBlack()</code> 再做重活。现有的屏幕参数观察者已经会在重配置完成后重压 gamma，顺序可以直接调换，不需要新机制。</p></div>
           <div class="k">本次修复</div><div class="v"><p>连接时先施加 gamma 黑屏，再执行镜像、分辨率和 Dock 调整；显示重配置后立即重压 gamma。类型检查通过，代码顺序核对完成。</p></div>
+        </div>
+      </article>
+
+      <article class="finding" data-status="done" id="R-5" data-sev="medium">
+        <div class="head"><span class="chip" data-st="done">已修复</span><span class="chip" data-sev="medium">中</span><span class="id">R-5</span><h3>施加与撤销顺序不是后进先出</h3></div>
+        <div class="kv">
+          <div class="k">问题</div><div class="v"><ul>
+            <li>分辨率快照是在开启镜像<b>之后</b>读的。若镜像组把主屏调到公共模式，记录的「原始模式」就是镜像后的模式。</li>
+            <li>恢复时显示器还在镜像组里，组内可用模式列表可能不含原模式，此时代码会永久丢弃快照。</li>
+            <li>崩溃恢复路径只回滚分辨率与 Dock，镜像要等首轮轮询；若远程熄屏总开关是关的，镜像残留没有自动清理。</li>
+          </ul><p>本机两块显示器型号相同，镜像不改变模式列表，当前不会触发；接不同型号显示器时会。</p></div>
+          <div class="k">建议</div><div class="v"><p>施加顺序改为快照分辨率、镜像、分辨率、Dock；撤销严格反序。显示器在镜像组里时不要以「模式不在列表」为由丢弃快照，只推迟。崩溃恢复里一并解除镜像。</p></div>
+          <div class="k">本次修复</div><div class="v"><p>镜像前保存原始分辨率；恢复先拆镜像再恢复分辨率，最后撤黑。启动时一并恢复镜像；镜像、睡眠或模式列表读取失败时保留分辨率快照，空闲轮询重试。类型检查与 11 项显示恢复回归通过。</p></div>
         </div>
       </article>
     </section>

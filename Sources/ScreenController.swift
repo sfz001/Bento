@@ -321,12 +321,24 @@ class ScreenController {
     /// 直接看盘上的键而不是 hasDockSnapshot()——它还会读 savedDock*，
     /// 那组是 dockQueue 独占的，主线程不该碰
     func recoverFromUncleanExit() {
-        let staleResolution = UserDefaults.standard.data(forKey: resolutionSnapshotDefaultsKey) != nil
-        let staleDock = UserDefaults.standard.data(forKey: dockSnapshotDefaultsKey) != nil
-        guard staleResolution || staleDock else { return }
-        NSLog("Recovering display/dock state left behind by an unclean exit")
-        if staleResolution { restoreResolution() }
-        if staleDock { restoreDock() }
+        restoreDock()
+        restoreDisplaySettings()
+    }
+
+    /// 镜像改变可用模式列表：先拆镜像，再恢复原始分辨率。
+    func restoreDisplaySettings() {
+        disableMirroring()
+        restoreResolution()
+    }
+
+    var hasPendingDisplayRestore: Bool { hasMirrorSnapshot() || hasResolutionSnapshot() }
+
+    /// 必须在开启镜像之前记录原始模式，避免把镜像组的公共模式当作原值。
+    func prepareResolutionSnapshot() {
+        let display = CGMainDisplayID()
+        guard CGDisplayIsBuiltin(display) != 0, !hasResolutionSnapshot(),
+              !isMirrored(display), let mode = CGDisplayCopyDisplayMode(display) else { return }
+        saveResolutionSnapshot(mode, display: display)
     }
 
     // MARK: Resolution
@@ -416,8 +428,13 @@ class ScreenController {
         } else {
             display = CGMainDisplayID()
         }
-        guard let modes = CGDisplayCopyAllDisplayModes(display, displayModeOptions) as? [CGDisplayMode],
-              let mode = modes.first(where: {
+        guard !isMirrored(display), CGDisplayIsAsleep(display) == 0 else {
+            NSLog("Resolution restore deferred: display mirrored or asleep")
+            return
+        }
+        // 读取失败不是「模式不存在」，必须保留快照。
+        guard let modes = CGDisplayCopyAllDisplayModes(display, displayModeOptions) as? [CGDisplayMode] else { return }
+        guard let mode = modes.first(where: {
                   $0.width == snapshot.width && $0.height == snapshot.height
                       && $0.pixelWidth == snapshot.pixelWidth && $0.pixelHeight == snapshot.pixelHeight
                       && abs($0.refreshRate - snapshot.refreshRate) < 0.5

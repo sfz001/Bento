@@ -85,10 +85,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         iconMgr.stop()
         tiling.stop()
         scrollReverser.stop()
-        screenCtl.restore()
-        screenCtl.restoreResolution()
+        sessionPrepared = false
         screenCtl.restoreDock()
-        screenCtl.disableMirroring()
+        screenCtl.restoreDisplaySettings()
+        screenCtl.restore()
         // Dock 还原是异步的，等它落地再让进程走，否则 Dock 会永远停在左边
         screenCtl.waitForPendingDockWork()
     }
@@ -345,7 +345,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 远程会话中热插显示器 / 睡眠唤醒：重新镜像 + 重压 gamma（都幂等）
     private func reassertScreenOffState() {
-        guard screenCtl.isScreenBlack else { return }
+        guard sessionPrepared, screenCtl.isScreenBlack else { return }
         screenCtl.enableMirroring()
         screenCtl.reassertBlackIfNeeded()
     }
@@ -411,6 +411,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             screenCtl.setBlack()
             if !sessionPrepared {
                 sessionPrepared = true
+                screenCtl.prepareResolutionSnapshot()
                 screenCtl.enableMirroring()
                 screenCtl.switchResolution()
                 screenCtl.saveDockAndSetLeft()
@@ -448,8 +449,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // ——某一路探测永久 unknown 时，启动首轮的镜像恢复不能被卡住
             // 边沿触发 + 「还有未完成的恢复就继续重试」：断开那一刻屏幕若正好睡着，
             // 镜像恢复会失败，只靠边沿触发就再也不会有第二次尝试（无快照时是空操作）
-            if lastPolledConnected != false || screenCtl.hasPendingMirrorRestore {
-                screenCtl.disableMirroring()
+            if lastPolledConnected != false || screenCtl.hasPendingDisplayRestore {
+                screenCtl.restoreDisplaySettings()
             }
             lastPolledConnected = false
             // 空闲态的探测故障不在这里记：noteProbeHealth 按连续轮数判定并进状态栏
@@ -514,10 +515,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let work = DispatchWorkItem { [weak self] in
             guard let self, gen == self.restoreGeneration else { return }
             self.pendingRestore = nil
-            self.screenCtl.restore()
-            self.screenCtl.restoreResolution()
             self.screenCtl.restoreDock()
-            self.screenCtl.disableMirroring(forceFallback: true)
+            self.screenCtl.restoreDisplaySettings()
+            self.screenCtl.restore()
             self.updateStatus()
         }
         pendingRestore = work
@@ -720,10 +720,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             sessionPrepared = false
             activeSource = nil
             if hadSession {
-                screenCtl.restore()
-                screenCtl.restoreResolution()
                 screenCtl.restoreDock()
-                screenCtl.disableMirroring(forceFallback: true)
+                screenCtl.restoreDisplaySettings()
+                screenCtl.restore()
             }
         }
         updateStatus()
