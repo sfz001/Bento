@@ -180,7 +180,7 @@
     <a href="#open">待处理</a>
     <a href="#sound">判定稳妥的部分</a>
     <a href="#evidence">附录：证据</a>
-    <a href="#fixed">已修复 · 29 项</a>
+    <a href="#fixed">已修复 · 30 项</a>
   </nav>
 
   <main>
@@ -189,18 +189,19 @@
       <h1>Bento 深度审计</h1>
       <p style="max-width:72ch;color:var(--muted)">对 macOS 菜单栏工具箱 Bento 全部源码、构建脚本与运行时状态的一次审计。报告在审计当天做了修订：期间发生了这套代码的首次真实远程会话，统一日志推翻了初版的一个核心结论，也暴露出一个初版没有发现的严重缺陷。</p>
       <div class="meta">
-        <div>基线 <b>9ed26fc</b>，修复核对至 <b>a9e6afb</b></div>
-        <div>代码量 <b>8 文件 / 约 6,000 行 Swift</b></div>
+        <div>审计基线 <b>9ed26fc</b>，本轮 <b>22 项逐项修复</b></div>
+        <div>基线代码量 <b>8 文件 / 约 6,000 行 Swift</b></div>
         <div>环境 <b>macOS 27.0 (26A5425a) · Swift 6.4</b></div>
         <div>硬件 <b>M4 Pro · 两块 Studio Display · 无内置屏</b></div>
         <div>类型检查 <b>通过</b></div>
         <div>方法 <b>全量代码通读 + 只读运行时取证</b></div>
-        <div>状态更新 <b>2026-09-08 · 镜像恢复 9 项模拟回归通过</b></div>
+        <div>状态更新 <b>2026-09-08 · 8 组自动回归通过</b></div>
       </div>
     </header>
 
     <section id="summary">
       <h2>结论</h2>
+      <p class="prose"><b>当前状态：30 项均已完成代码或文档修复。</b>本轮处理此前剩余的 22 项，每项单独提交并推送。下文保留初始审计结论与当时证据；真实远程会话、显示硬件和 UI 行为仍需实机复测。</p>
       <div class="prose">
         <p>这套代码的防御性工程密度远高于同类个人工具。快照「先落盘、不覆盖、成功才清、坏数据记日志并删除」的纪律在镜像、分辨率、Dock 三处保持一致；探测三态、锁屏优先、代际令牌、线程归属注释，都是踩过坑之后写下的正确设计。防睡模块没有发现缺陷。</p>
         <p>问题几乎全部集中在远程熄屏这一条链路上，而根因是同一个：<b>这条链路在本机从未被执行过</b>。屏幕共享探测依赖的 <code>netstat -an -p tcp</code> 在 macOS 27 对非 root 进程输出空表，探测永远返回「未知」，于是从 7 月 30 日到 9 月 8 日凌晨，熄屏、镜像、分辨率、Dock 一次都没跑起来。所有围绕它的代码都只经过阅读，没有经过运行。</p>
@@ -215,13 +216,12 @@
         <div class="tile" data-k="high"><div class="n">3</div><div class="l">高</div></div>
         <div class="tile" data-k="medium"><div class="n">9</div><div class="l">中</div></div>
         <div class="tile" data-k="low"><div class="n">16</div><div class="l">低 / 提示</div></div>
-        <div class="tile" data-k="done"><div class="n">29</div><div class="l">已完整修复</div></div>
-        <div class="tile" data-k="open"><div class="n">1</div><div class="l">待完成 · 含 1 项部分修复</div></div>
+        <div class="tile" data-k="done"><div class="n">30</div><div class="l">已完整修复</div></div>
+        <div class="tile" data-k="open"><div class="n">0</div><div class="l">待完成 · 含 0 项部分修复</div></div>
       </div>
       <div class="actions">
-        <div class="eyebrow">待处理项里建议优先的三件</div>
-        <ol>
-        </ol>
+        <div class="eyebrow">修复与验证</div>
+        <p>8 组自动回归通过，覆盖会话状态、镜像恢复、连接认证、布局、手势、日志、图标语义和致命信号。菜单栏图标模块保持停用；真实黑屏演练需由用户主动确认启动。</p>
       </div>
     </section>
 
@@ -249,12 +249,11 @@
 
     <section id="status">
       <h2>发现总览</h2>
-      <p class="prose" style="color:var(--muted)">共 30 项：29 项完整修复，1 项部分修复，0 项待处理。未完成项优先展示，已修复行置灰、划线并排在表格末尾。</p>
+      <p class="prose" style="color:var(--muted)">共 30 项，均已修复。总览行置灰、问题文字加删除线；详细条目统一放在报告底部，保留原问题与修复依据。</p>
       <div class="table-wrap">
         <table>
           <thead><tr><th>编号</th><th>严重度</th><th>状态</th><th>提交</th><th>问题</th></tr></thead>
           <tbody>
-            <tr data-status="partial"><td class="nw"><a href="#X-7">X-7</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="partial">部分修复</span></td><td class="nw mono">3db76ad</td><td>文档与代码不符（CLAUDE.md 已更正，README 仍有漂移）</td></tr>
             <tr data-status="done"><td class="nw"><a href="#M-1">M-1</a></td><td class="nw"><span class="chip" data-sev="critical">严重</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">b17e1b2</td><td>硬件镜像组里 <code>CGDisplayMirrorsDisplay</code> 恒为 0，镜像永远拆不掉且快照被清</td></tr>
             <tr data-status="done"><td class="nw"><a href="#R-1">R-1</a></td><td class="nw"><span class="chip" data-sev="critical">严重</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">f480791</td><td>netstat 在 macOS 27 输出空表，屏幕共享探测永久失效且无 UI 提示</td></tr>
             <tr data-status="done"><td class="nw"><a href="#R-2">R-2</a></td><td class="nw"><span class="chip" data-sev="high">高</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">3db76ad</td><td>分辨率切换无门槛，会把外接主屏切走（实测已发生）</td></tr>
@@ -263,27 +262,28 @@
             <tr data-status="done"><td class="nw"><a href="#M-2">M-2</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">a9e6afb</td><td>镜像副屏被误判为睡眠，恢复被跳过；睡眠后缺重试</td></tr>
             <tr data-status="done"><td class="nw"><a href="#R-8">R-8</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">3db76ad</td><td>探测健康度只进日志不进界面</td></tr>
             <tr data-status="done"><td class="nw"><a href="#X-4">X-4</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">3db76ad</td><td>单实例守卫静默退出，新构建装上却起不来</td></tr>
-            <tr data-status="done"><td class="nw"><a href="#R-4">R-4</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：R-4</td><td>先做镜像/分辨率/Dock 才压黑，重活期间桌面可见</td></tr>
-            <tr data-status="done"><td class="nw"><a href="#R-5">R-5</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：R-5</td><td>施加与撤销顺序不是后进先出</td></tr>
-            <tr data-status="done"><td class="nw"><a href="#R-6">R-6</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：R-6</td><td>分辨率快照的「不覆盖」规则不区分显示器</td></tr>
-            <tr data-status="done"><td class="nw"><a href="#R-7">R-7</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：R-7</td><td>探测只看进程名，端口扫描即可触发熄屏与锁屏</td></tr>
-            <tr data-status="done"><td class="nw"><a href="#T-2">T-2</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：T-2</td><td>甩动手势按几何判定，浏览器标签页拖拽会误触发最大化</td></tr>
-            <tr data-status="done"><td class="nw"><a href="#X-1">X-1</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：X-1</td><td>Swift 运行时 trap 不进 error.log</td></tr>
-            <tr data-status="done"><td class="nw"><a href="#R-9">R-9</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：R-9</td><td>目标分辨率同时匹配当前刷新率，并优先选择差值最小的模式；0 Hz 动态/未知刷新率只与 0 匹配，没有合适模式则跳过切换</td></tr>
-            <tr data-status="done"><td class="nw"><a href="#R-10">R-10</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：R-10</td><td>退出时等待 Dock 队列设置 2 秒总预算；超时正常退出并保留已有快照，下次启动补偿</td></tr>
-            <tr data-status="done"><td class="nw"><a href="#X-8">X-8</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：X-8</td><td>熄屏本身不留日志痕迹，事后无法确认屏幕是否真的黑过</td></tr>
-            <tr data-status="done"><td class="nw"><a href="#S-1">S-1</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：S-1</td><td>滚动 tap 启动增加显式授权提示参数</td></tr>
-            <tr data-status="done"><td class="nw"><a href="#S-2">S-2</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：S-2</td><td>权限提示标题、说明、按钮和 Info.plist 输入监控用途说明统一为中文；提示明确授权后可通过菜单重新检测，无需退出重开</td></tr>
-            <tr data-status="done"><td class="nw"><a href="#T-3">T-3</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：T-3</td><td>屏幕参数变化时按 UUID 重排编辑窗口，保留 working 草稿与已有窗口选择</td></tr>
-            <tr data-status="done"><td class="nw"><a href="#T-4">T-4</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：T-4</td><td>Esc 与回车仅在当前 keyWindow 属于编辑面或编辑工具条、且事件归属一致时处理；其它 Bento 窗口、弹窗和带 Command/Control/Option 的快捷键正常放行</td></tr>
-            <tr data-status="done"><td class="nw"><a href="#T-5">T-5</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：T-5</td><td>负缓存坐标量化前钳制到明确可表示的整数范围，继续拒绝 NaN/Infinity；避免 CGFloat(Int.max) 边界舍入导致 trap</td></tr>
-            <tr data-status="done"><td class="nw"><a href="#X-3">X-3</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：X-3</td><td>普通错误日志按消息或显式模板键限速，保留首次与状态变化，60 秒汇总重复次数；即使不再有消息也定时落下最后一批计数</td></tr>
-            <tr data-status="done"><td class="nw"><a href="#X-5">X-5</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：X-5</td><td>CFBundleVersion 写入 Git 提交计数，另存短提交号、未提交改动标志与 UTC 构建时间；启动同步写入日志，可明确识别运行的是哪份构建</td></tr>
-            <tr data-status="done"><td class="nw"><a href="#X-6">X-6</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：X-6</td><td>Info.plist 补充中文 NSAppleEventsUsageDescription，说明仅在用户选择 FileVault 免密重启时控制终端，命令仍需管理员身份确认</td></tr>
-            <tr data-status="done"><td class="nw"><a href="#I-1">I-1</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：I-1</td><td>删除 chevron 点击前无条件投递的全局 ESC，避免取消前台对话框和输入法候选；菜单拦截点击时交由现有结果校验及有限重试处理</td></tr>
-            <tr data-status="done"><td class="nw"><a href="#I-2">I-2</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：I-2</td><td>系统模块名称同时按中英文逗号截断并去掉首尾空白，空名称回退到模块名；启用后的刷新还会清理旧 module 缓存，第三方应用名称不受影响</td></tr>
-            <tr data-status="done"><td class="nw"><a href="#I-3">I-3</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：I-3</td><td>溢出条改为无按钮、收起、展开、不可读四态</td></tr>
-            <tr data-status="done"><td class="nw"><a href="#X-2">X-2</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：X-2</td><td>已补镜像恢复测试，完整熄屏流程仍缺演练入口</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#R-4">R-4</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw"><code>f0cbc58</code></td><td>先做镜像/分辨率/Dock 才压黑，重活期间桌面可见</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#R-5">R-5</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw"><code>4c7f2d4</code></td><td>施加与撤销顺序不是后进先出</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#R-6">R-6</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw"><code>1743ba8</code></td><td>分辨率快照的「不覆盖」规则不区分显示器</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#R-7">R-7</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw"><code>b7fc23e</code></td><td>探测只看进程名，端口扫描即可触发熄屏与锁屏</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#T-2">T-2</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw"><code>20c1deb</code></td><td>甩动手势按几何判定，浏览器标签页拖拽会误触发最大化</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#X-1">X-1</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw"><code>e28d471</code></td><td>Swift 运行时 trap 不进 error.log</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#R-9">R-9</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw"><code>1fd3a97</code></td><td>目标分辨率同时匹配当前刷新率，并优先选择差值最小的模式；0 Hz 动态/未知刷新率只与 0 匹配，没有合适模式则跳过切换</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#R-10">R-10</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw"><code>8ff385f</code></td><td>退出时等待 Dock 队列设置 2 秒总预算；超时正常退出并保留已有快照，下次启动补偿</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#X-8">X-8</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw"><code>9837dc6</code></td><td>熄屏本身不留日志痕迹，事后无法确认屏幕是否真的黑过</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#S-1">S-1</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw"><code>d47aaed</code></td><td>滚动 tap 启动增加显式授权提示参数</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#S-2">S-2</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw"><code>e65aaca</code></td><td>权限提示标题、说明、按钮和 Info.plist 输入监控用途说明统一为中文；提示明确授权后可通过菜单重新检测，无需退出重开</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#T-3">T-3</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw"><code>d92c503</code></td><td>屏幕参数变化时按 UUID 重排编辑窗口，保留 working 草稿与已有窗口选择</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#T-4">T-4</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw"><code>1f0e120</code></td><td>Esc 与回车仅在当前 keyWindow 属于编辑面或编辑工具条、且事件归属一致时处理；其它 Bento 窗口、弹窗和带 Command/Control/Option 的快捷键正常放行</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#T-5">T-5</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw"><code>818c390</code></td><td>负缓存坐标量化前钳制到明确可表示的整数范围，继续拒绝 NaN/Infinity；避免 CGFloat(Int.max) 边界舍入导致 trap</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#X-3">X-3</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw"><code>178f18e</code></td><td>普通错误日志按消息或显式模板键限速，保留首次与状态变化，60 秒汇总重复次数；即使不再有消息也定时落下最后一批计数</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#X-5">X-5</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw"><code>71873b4</code></td><td>CFBundleVersion 写入 Git 提交计数，另存短提交号、未提交改动标志与 UTC 构建时间；启动同步写入日志，可明确识别运行的是哪份构建</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#X-6">X-6</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw"><code>b3204a8</code></td><td>Info.plist 补充中文 NSAppleEventsUsageDescription，说明仅在用户选择 FileVault 免密重启时控制终端，命令仍需管理员身份确认</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#I-1">I-1</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw"><code>55f5522</code></td><td>删除 chevron 点击前无条件投递的全局 ESC，避免取消前台对话框和输入法候选；菜单拦截点击时交由现有结果校验及有限重试处理</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#I-2">I-2</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw"><code>33c3ce3</code></td><td>系统模块名称同时按中英文逗号截断并去掉首尾空白，空名称回退到模块名；启用后的刷新还会清理旧 module 缓存，第三方应用名称不受影响</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#I-3">I-3</a></td><td><span class="chip" data-sev="low">低 / 提示</span></td><td><span class="chip" data-st="done">已修复</span></td><td class="nw"><code>60ddf69</code></td><td>溢出条改为无按钮、收起、展开、不可读四态</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#X-2">X-2</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw"><code>f62c7ed</code></td><td>已补镜像恢复测试，完整熄屏流程仍缺演练入口</td></tr>
+            <tr data-status="done"><td class="nw"><a href="#X-7">X-7</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw">提交说明：X-7</td><td>文档与代码不符（中英文 README 与 CLAUDE.md 已同步）</td></tr>
           </tbody>
         </table>
       </div>
@@ -291,51 +291,10 @@
 
 
     <section id="open">
-      <h2>待处理</h2>
-
-
-
-
-
-
-
-
-      <article class="finding" id="X-7" data-status="partial" data-sev="low">
-        <div class="head"><span class="chip" data-sev="low">低</span><span class="chip" data-st="partial">部分修复</span><span class="id">X-7</span><h3>文档与代码不符</h3></div>
-        <div class="kv">
-          <div class="k">已更正</div><div class="v"><p>CLAUDE.md 里 1512×982 的错误断言、锁屏语义、镜像判据、AX 超时、重启方式均已同步。</p></div>
-          <div class="k">仍有漂移</div><div class="v"><ul>
-            <li>README 写「⌘ + 拖动标题栏吸附」，代码只认 Shift。</li>
-            <li>README 写双击取重叠面积最大的格子，代码取点击点所在格子。</li>
-            <li>README 未提 Shift 双击铺满与甩动手势。</li>
-            <li>README 的图标管理整节描述的是已停用的模块。</li>
-            <li>README 说授权后需退出重开，实际菜单里有「重新检测滚动权限」。</li>
-            <li>CLAUDE.md 防睡段写的键名是 <code>SleepGuardDefaultMinutes</code>，代码里是 <code>SleepGuardCustomMinutes</code>。</li>
-          </ul></div>
-        </div>
-      </article>
-
-
-      <h3 id="minor" style="padding-top:8px">零散项</h3>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>编号</th><th>位置</th><th>问题与建议</th></tr></thead>
-          <tbody>
-          </tbody>
-        </table>
-      </div>
-
-      <h3 id="icons" style="padding-top:8px">图标管理模块（已停用）</h3>
-      <div class="prose">
-        <p>该模块 1695 行，占代码约 29%，<code>featureEnabled</code> 为假，完全不运行。这是一个决定题：要么恢复，要么移到分支只留文档指针。保持现状的代价是每次审阅都要读一遍。重新启用前的待处理项如下：</p>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>编号</th><th>问题</th></tr></thead>
-          <tbody>
-          </tbody>
-        </table>
-      </div>
+      <h2>待处理 · 0 项</h2>
+      <p class="prose">原报告的待修复项已全部归档。代码及模拟回归完成不等于所有真实硬件场景已复测。</p>
+      <p id="minor" class="prose">其余小项均已修复，详见底部归档。</p>
+      <p id="icons" class="prose">图标模块三项已修复；模块继续停用。</p>
     </section>
 
     <section id="sound">
@@ -402,8 +361,8 @@ CGCompleteDisplayConfiguration: err 1014 (1 块)
     </section>
 
     <section id="fixed">
-      <h2>已修复 · 29 项</h2>
-      <p class="prose" style="color:var(--muted)">以下条目已对照当前代码确认完成，移至报告底部归档。标题加删除线，正文与标签置灰；修复依据保留供追溯。部分修复项仍在待处理区。</p>
+      <h2>已修复 · 30 项</h2>
+      <p class="prose" style="color:var(--muted)">以下条目已对照当前代码确认完成，移至报告底部归档。标题加删除线，正文与标签置灰；修复依据保留供追溯。本轮新增修复均有独立提交；实机复测边界见各条目。</p>
 
       <article class="finding" data-status="done" id="M-1" data-sev="critical">
         <div class="head"><span class="chip" data-sev="critical">严重</span><span class="chip" data-st="done">已修复 b17e1b2</span><span class="id">M-1</span><h3>硬件镜像组里镜像永远拆不掉，而快照被清空</h3></div>
@@ -634,7 +593,7 @@ CGCompleteDisplayConfiguration: err 1014 (1 块)
         <div class="head"><span class="chip" data-st="done">已修复</span><span class="chip" data-sev="medium">中</span><span class="id">X-2</span><h3>已有镜像回归测试，完整熄屏流程仍缺演练入口</h3></div>
         <div class="kv">
           <div class="k">已补充</div><div class="v"><p><code>a9e6afb</code> 新增 9 项镜像恢复模拟回归测试，直接编译当前 <code>ScreenController.swift</code> 并替换显示器接口，不改变真实显示器布局。原先「零自动化测试」的描述已不适用。</p></div>
-          <div class="k">仍待处理</div><div class="v"><p>大量逻辑不依赖 UI，本可直接单测：布局树的操作与容错解码、两个甩动判定、探测三态到状态机的流转、快照的不覆盖规则。而整条熄屏链路至今只被真实会话验证过一次，唯一的验证方式是让人远程连进来，或让局域网扫一下 5900 端口，后者会直接黑屏加锁屏。</p></div>
+          <div class="k">原待处理</div><div class="v"><p>大量逻辑不依赖 UI，本可直接单测：布局树的操作与容错解码、两个甩动判定、探测三态到状态机的流转、快照的不覆盖规则。而整条熄屏链路至今只被真实会话验证过一次，唯一的验证方式是让人远程连进来，或让局域网扫一下 5900 端口，后者会直接黑屏加锁屏。</p></div>
           <div class="k">建议</div><div class="v"><ul>
             <li>菜单加一项「模拟远程连接」，走完整的镜像、Dock、压黑、锁定确认、恢复流程，不依赖真实连接。</li>
             <li>把纯逻辑抽到不引用 AppKit 的文件，加一个 <code>./build_app.sh --test</code>。</li>
@@ -642,10 +601,26 @@ CGCompleteDisplayConfiguration: err 1014 (1 块)
           <div class="k">本次修复</div><div class="v"><p>新增 ./build_app.sh --test，8 组回归覆盖实际 AppDelegate 会话流、镜像恢复、认证探测、布局模型、手势、日志、图标语义与致命信号。菜单新增需主动确认的 10 秒熄屏演练，真实连接可接管；修复锁定等待重入和重连状态保留边界。完整模拟测试集通过，实际黑屏演练未在用户屏幕上自动执行。</p></div>
         </div>
       </article>
+
+      <article class="finding" data-status="done" id="X-7" data-sev="low">
+        <div class="head"><span class="chip" data-st="done">已修复</span><span class="chip" data-sev="low">低</span><span class="id">X-7</span><h3>文档与代码不符</h3></div>
+        <div class="kv">
+          <div class="k">已更正</div><div class="v"><p>CLAUDE.md 里 1512×982 的错误断言、锁屏语义、镜像判据、AX 超时、重启方式均已同步。</p></div>
+          <div class="k">修复前的漂移</div><div class="v"><ul>
+            <li>README 写「⌘ + 拖动标题栏吸附」，代码只认 Shift。</li>
+            <li>README 写双击取重叠面积最大的格子，代码取点击点所在格子。</li>
+            <li>README 未提 Shift 双击铺满与甩动手势。</li>
+            <li>README 的图标管理整节描述的是已停用的模块。</li>
+            <li>README 说授权后需退出重开，实际菜单里有「重新检测滚动权限」。</li>
+            <li>CLAUDE.md 防睡段写的键名是 <code>SleepGuardDefaultMinutes</code>，代码里是 <code>SleepGuardCustomMinutes</code>。</li>
+          </ul></div>
+          <div class="k">本次修复</div><div class="v"><p>同步中英文 README 与 CLAUDE.md：真实认证探测、先压黑和恢复顺序、刷新率限制、演练入口、Shift/甩动手势、编辑草稿、权限重试、登录项状态、图标停用、构建日志与 8 组测试。归档全部 30 项，保留原始证据并注明真实硬件验证边界。</p></div>
+        </div>
+      </article>
     </section>
 
     <footer>
-      审计及修复状态更新于 2026-09-08。修复记录：f480791、3db76ad、b17e1b2、a9e6afb。
+      审计及修复状态更新于 2026-09-08。本轮 22 项各自独立提交；提交号见发现总览，X-7 对应本次文档提交。
       本报告随代码一同版本化；保留原始审计证据，修复状态随代码更新。
     </footer>
   </main>
