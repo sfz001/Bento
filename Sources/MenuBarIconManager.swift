@@ -914,19 +914,11 @@ class MenuBarIconManager: NSObject {
     }
 
     /// 合成坐标点击（chevron 展开/收起专用；frame 由 chevronRect 现读现用）。
-    /// 先投 ESC 再点：误投的 up 可能点开某个状态项菜单（悬浮在菜单栏上），
-    /// 打开着的菜单会吞掉 chevron 点击——ESC 关掉它
+    /// 不发送全局 ESC：它可能取消前台应用对话框或输入法候选。
+    /// 菜单挡住点击时由展开/收起的结果校验与有限重试处理。
     private func click(_ p: CGPoint) {
         onMainSync {
             guard let src = CGEventSource(stateID: .hidSystemState) else { return }
-            if let escDown = CGEvent(keyboardEventSource: src, virtualKey: 53, keyDown: true) {
-                escDown.post(tap: .cghidEventTap)
-            }
-            usleep(60_000)
-            if let escUp = CGEvent(keyboardEventSource: src, virtualKey: 53, keyDown: false) {
-                escUp.post(tap: .cghidEventTap)
-            }
-            usleep(100_000)
             let saved = CGEvent(source: nil)?.location
             CGWarpMouseCursorPosition(p)
             usleep(100_000)
