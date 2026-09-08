@@ -1,0 +1,543 @@
+<meta charset="utf-8">
+<title>Bento 深度审计</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --bg: #F4F6F8;
+    --surface: #FFFFFF;
+    --surface-2: #EDF0F3;
+    --ink: #171C24;
+    --muted: #5A6472;
+    --hair: #D9DEE5;
+    --accent: #1E6B74;
+    --accent-soft: #E3F0F1;
+    --sev-critical: #9F1D1D; --sev-critical-bg: #FBE9E9;
+    --sev-high: #B4530A;     --sev-high-bg: #FCEEDF;
+    --sev-medium: #8A6A00;   --sev-medium-bg: #FAF2D6;
+    --sev-low: #4B5563;      --sev-low-bg: #E9ECF0;
+    --sev-info: #5A6472;     --sev-info-bg: #E9ECF0;
+    --done: #2F6B3A;         --done-bg: #E5F2E7;
+    --open: #8A5A00;         --open-bg: #FAF0DC;
+    --code-bg: #F0F2F5;
+    --shadow: 0 1px 2px rgba(23, 28, 36, .06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0F1216; --surface: #171B21; --surface-2: #1F252D;
+      --ink: #E7EAEE; --muted: #98A2B0; --hair: #2A313A;
+      --accent: #6CC0C8; --accent-soft: #14333A;
+      --sev-critical: #F08A8A; --sev-critical-bg: #3A1A1A;
+      --sev-high: #F0A868;     --sev-high-bg: #3A2614;
+      --sev-medium: #E3C862;   --sev-medium-bg: #332D12;
+      --sev-low: #A9B2C0;      --sev-low-bg: #242A32;
+      --sev-info: #A9B2C0;     --sev-info-bg: #242A32;
+      --done: #8BCB97;         --done-bg: #16301B;
+      --open: #E3C862;         --open-bg: #332D12;
+      --code-bg: #12161B; --shadow: none;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0F1216; --surface: #171B21; --surface-2: #1F252D;
+    --ink: #E7EAEE; --muted: #98A2B0; --hair: #2A313A;
+    --accent: #6CC0C8; --accent-soft: #14333A;
+    --sev-critical: #F08A8A; --sev-critical-bg: #3A1A1A;
+    --sev-high: #F0A868;     --sev-high-bg: #3A2614;
+    --sev-medium: #E3C862;   --sev-medium-bg: #332D12;
+    --sev-low: #A9B2C0;      --sev-low-bg: #242A32;
+    --sev-info: #A9B2C0;     --sev-info-bg: #242A32;
+    --done: #8BCB97;         --done-bg: #16301B;
+    --open: #E3C862;         --open-bg: #332D12;
+    --code-bg: #12161B; --shadow: none;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    font-size: 15px; line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+  code, pre, .mono { font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace; }
+  code { font-size: .88em; background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+  pre { margin: 0; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover, a:focus-visible { text-decoration: underline; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  h1, h2, h3 { text-wrap: balance; margin: 0; font-weight: 600; letter-spacing: -.01em; }
+  h1 { font-size: 32px; line-height: 1.2; }
+  h2 { font-size: 21px; line-height: 1.3; padding-top: 8px; }
+  h3 { font-size: 16.5px; line-height: 1.35; }
+  p { margin: 0; }
+  ul, ol { margin: 0; padding-left: 1.3em; }
+  li + li { margin-top: 4px; }
+  .eyebrow { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+
+  .page { max-width: 1180px; margin: 0 auto; padding: 40px 28px 80px; display: grid; grid-template-columns: 216px minmax(0, 1fr); gap: 48px; }
+  @media (max-width: 1000px) { .page { grid-template-columns: minmax(0, 1fr); gap: 28px; } .toc { position: static !important; } }
+
+  .toc { position: sticky; top: 24px; align-self: start; display: flex; flex-direction: column; gap: 6px; font-size: 13.5px; }
+  .toc .eyebrow { margin-bottom: 6px; }
+  .toc a { color: var(--muted); padding: 3px 0 3px 10px; border-left: 2px solid transparent; }
+  .toc a:hover { color: var(--ink); border-left-color: var(--hair); text-decoration: none; }
+
+  main { display: flex; flex-direction: column; gap: 44px; min-width: 0; }
+  .prose { max-width: 76ch; display: flex; flex-direction: column; gap: 12px; }
+  section { display: flex; flex-direction: column; gap: 16px; scroll-margin-top: 20px; }
+
+  header.hero { display: flex; flex-direction: column; gap: 14px; padding-bottom: 28px; border-bottom: 1px solid var(--hair); }
+  .meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px 28px; font-size: 13.5px; color: var(--muted); }
+  .meta b { color: var(--ink); font-weight: 500; }
+
+  .score { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
+  .score .tile { background: var(--surface); border: 1px solid var(--hair); border-radius: 6px; padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; box-shadow: var(--shadow); }
+  .score .n { font-size: 27px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .score .l { font-size: 12.5px; color: var(--muted); }
+  .score .tile[data-k="critical"] .n { color: var(--sev-critical); }
+  .score .tile[data-k="high"] .n { color: var(--sev-high); }
+  .score .tile[data-k="medium"] .n { color: var(--sev-medium); }
+  .score .tile[data-k="low"] .n { color: var(--sev-low); }
+  .score .tile[data-k="done"] .n { color: var(--done); }
+  .score .tile[data-k="open"] .n { color: var(--open); }
+  @media (max-width: 760px) { .score { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+
+  .chip { display: inline-flex; align-items: center; font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11px; letter-spacing: .06em; padding: 2px 8px; border-radius: 3px; font-weight: 500; white-space: nowrap; }
+  .chip[data-sev="critical"] { color: var(--sev-critical); background: var(--sev-critical-bg); }
+  .chip[data-sev="high"] { color: var(--sev-high); background: var(--sev-high-bg); }
+  .chip[data-sev="medium"] { color: var(--sev-medium); background: var(--sev-medium-bg); }
+  .chip[data-sev="low"] { color: var(--sev-low); background: var(--sev-low-bg); }
+  .chip[data-sev="info"] { color: var(--sev-info); background: var(--sev-info-bg); }
+  .chip[data-st="done"] { color: var(--done); background: var(--done-bg); }
+  .chip[data-st="open"] { color: var(--open); background: var(--open-bg); }
+
+  .callout { border: 1px solid var(--hair); border-left: 3px solid var(--sev-critical); background: var(--surface); border-radius: 6px; padding: 16px 20px; display: flex; flex-direction: column; gap: 8px; box-shadow: var(--shadow); }
+  .callout.note { border-left-color: var(--accent); }
+  .callout .eyebrow { color: var(--sev-critical); }
+  .callout.note .eyebrow { color: var(--accent); }
+
+  .actions { background: var(--surface); border: 1px solid var(--hair); border-radius: 6px; padding: 18px 22px; display: flex; flex-direction: column; gap: 10px; box-shadow: var(--shadow); }
+  .actions ol { padding-left: 1.4em; display: flex; flex-direction: column; gap: 8px; }
+  .actions li::marker { font-family: "IBM Plex Mono", ui-monospace, monospace; color: var(--accent); font-weight: 500; }
+
+  /* 时间线：左列时刻，右列事件；用竖线连成一条 */
+  .timeline { display: grid; grid-template-columns: 88px 14px minmax(0, 1fr); gap: 0 12px; font-size: 14px; }
+  .timeline .t { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12.5px; color: var(--muted); padding: 6px 0; text-align: right; font-variant-numeric: tabular-nums; }
+  .timeline .rail { position: relative; }
+  .timeline .rail::before { content: ""; position: absolute; left: 6px; top: 0; bottom: 0; width: 1px; background: var(--hair); }
+  .timeline .row:first-child .rail::before { top: 14px; }
+  .timeline .row:last-child .rail::before { bottom: calc(100% - 14px); }
+  .timeline .dot { position: absolute; left: 2px; top: 12px; width: 9px; height: 9px; border-radius: 50%; background: var(--muted); border: 2px solid var(--bg); box-sizing: content-box; }
+  .timeline .e { padding: 6px 0 10px; }
+  .timeline .row { display: contents; }
+  .timeline .row[data-kind="bento"] .dot { background: var(--accent); }
+  .timeline .row[data-kind="fail"] .dot { background: var(--sev-critical); }
+  .timeline .row[data-kind="fail"] .e { color: var(--sev-critical); font-weight: 500; }
+  .timeline .who { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11px; color: var(--muted); letter-spacing: .04em; }
+
+  .finding { border-left: 3px solid var(--sev-low); padding: 4px 0 4px 20px; display: flex; flex-direction: column; gap: 10px; scroll-margin-top: 20px; }
+  .finding[data-sev="critical"] { border-left-color: var(--sev-critical); }
+  .finding[data-sev="high"] { border-left-color: var(--sev-high); }
+  .finding[data-sev="medium"] { border-left-color: var(--sev-medium); }
+  .finding + .finding { margin-top: 22px; }
+  .finding .head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; }
+  .finding .id { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 13px; color: var(--muted); font-weight: 500; }
+  .kv { display: grid; grid-template-columns: 5.5em minmax(0, 1fr); gap: 6px 14px; max-width: 80ch; }
+  .kv .k { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; letter-spacing: .04em; color: var(--muted); padding-top: 4px; }
+  .kv .v { min-width: 0; }
+  .loc { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12.5px; color: var(--muted); }
+
+  pre.evidence { background: var(--code-bg); border: 1px solid var(--hair); border-radius: 5px; padding: 12px 14px; font-size: 12.5px; line-height: 1.55; overflow-x: auto; white-space: pre; color: var(--ink); }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--hair); border-radius: 6px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; vertical-align: top; padding: 9px 14px; border-bottom: 1px solid var(--hair); }
+  th { font-weight: 500; color: var(--muted); font-size: 12.5px; letter-spacing: .03em; background: var(--surface-2); white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  td.nw { white-space: nowrap; }
+  .ok-list li::marker { color: var(--done); content: "✓ "; }
+  footer { color: var(--muted); font-size: 13px; padding-top: 24px; border-top: 1px solid var(--hair); }
+  @media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+</style>
+
+<div class="page">
+  <nav class="toc" aria-label="目录">
+    <div class="eyebrow">目录</div>
+    <a href="#summary">结论</a>
+    <a href="#timeline">首次真实会话</a>
+    <a href="#status">发现总览</a>
+    <a href="#fixed">已修复</a>
+    <a href="#open">待处理</a>
+    <a href="#sound">判定稳妥的部分</a>
+    <a href="#evidence">附录：证据</a>
+  </nav>
+
+  <main>
+    <header class="hero">
+      <div class="eyebrow">审计报告 · Bento · 2026-09-08</div>
+      <h1>Bento 深度审计</h1>
+      <p style="max-width:72ch;color:var(--muted)">对 macOS 菜单栏工具箱 Bento 全部源码、构建脚本与运行时状态的一次审计。报告在审计当天做了修订：期间发生了这套代码的首次真实远程会话，统一日志推翻了初版的一个核心结论，也暴露出一个初版没有发现的严重缺陷。</p>
+      <div class="meta">
+        <div>基线 <b>9ed26fc</b>，修复至 <b>b17e1b2</b></div>
+        <div>代码量 <b>8 文件 / 约 6,000 行 Swift</b></div>
+        <div>环境 <b>macOS 27.0 (26A5425a) · Swift 6.4</b></div>
+        <div>硬件 <b>M4 Pro · 两块 Studio Display · 无内置屏</b></div>
+        <div>类型检查 <b>通过</b></div>
+        <div>方法 <b>全量代码通读 + 只读运行时取证</b></div>
+      </div>
+    </header>
+
+    <section id="summary">
+      <h2>结论</h2>
+      <div class="prose">
+        <p>这套代码的防御性工程密度远高于同类个人工具。快照「先落盘、不覆盖、成功才清、坏数据记日志并删除」的纪律在镜像、分辨率、Dock 三处保持一致；探测三态、锁屏优先、代际令牌、线程归属注释，都是踩过坑之后写下的正确设计。防睡模块没有发现缺陷。</p>
+        <p>问题几乎全部集中在远程熄屏这一条链路上，而根因是同一个：<b>这条链路在本机从未被执行过</b>。屏幕共享探测依赖的 <code>netstat -an -p tcp</code> 在 macOS 27 对非 root 进程输出空表，探测永远返回「未知」，于是从 7 月 30 日到 9 月 8 日凌晨，熄屏、镜像、分辨率、Dock 一次都没跑起来。所有围绕它的代码都只经过阅读，没有经过运行。</p>
+      </div>
+      <div class="callout">
+        <div class="eyebrow">初版结论的更正</div>
+        <p>初版报告写的是「整条链路到现在一次都没真跑过」。这句话在写下时已经不准确：探测修复（<code>pgrep -x screensharingd</code>）当天凌晨 02:39 就已生效，02:56 的一次真实屏幕共享会话完整地跑完了整条链路。物主指出了这一点，统一日志证实了他。</p>
+        <p>准确的说法是：<b>2026-09-08 02:56 之前从未执行过</b>。而那一次执行立刻暴露了一个静态审计没有发现的严重缺陷，见下节。</p>
+      </div>
+      <div class="score" aria-label="发现统计">
+        <div class="tile" data-k="critical"><div class="n">2</div><div class="l">严重</div></div>
+        <div class="tile" data-k="high"><div class="n">3</div><div class="l">高</div></div>
+        <div class="tile" data-k="medium"><div class="n">9</div><div class="l">中</div></div>
+        <div class="tile" data-k="low"><div class="n">16</div><div class="l">低 / 提示</div></div>
+        <div class="tile" data-k="done"><div class="n">9</div><div class="l">已修复</div></div>
+        <div class="tile" data-k="open"><div class="n">21</div><div class="l">待处理</div></div>
+      </div>
+      <div class="actions">
+        <div class="eyebrow">待处理项里建议优先的三件</div>
+        <ol>
+          <li><b>补一个熄屏演练入口。</b>整条链路仍然只被真实会话验证过一次，而唯一的验证方式是让人远程连进来，或者让局域网扫一下 5900 端口，后者会直接黑屏加锁屏。菜单里加一项「模拟远程连接」才能让这条链路可被例行验证。见 <a href="#X-2">X-2</a>。</li>
+          <li><b>先压黑，再干重活。</b>现在连接时先做镜像与 Dock 调整，最后才压黑。这两步在真实硬件上要一到数秒，实测 02:56 那次从连接被接受到 Dock 重启用了约三秒，期间桌面对旁人完全可见。见 <a href="#R-4">R-4</a>。</li>
+          <li><b>给甩动手势加位移校验。</b>浏览器标签页往上一拖分离成新窗口，轨迹正好满足上甩判定，源窗口会被莫名最大化。见 <a href="#T-2">T-2</a>。</li>
+        </ol>
+      </div>
+    </section>
+
+    <section id="timeline">
+      <h2>首次真实会话：02:56 到 03:06</h2>
+      <div class="prose">
+        <p>以下时刻全部来自统一日志，标注了每一步是 Bento 发起还是系统发起。这是这套代码第一次完整执行，也是本次审计最有价值的一段证据。</p>
+      </div>
+      <div class="timeline">
+        <div class="row"><div class="t">02:56:10.9</div><div class="rail"><span class="dot"></span></div><div class="e">屏幕共享连接被接受，<code>screensharingd</code> 由 launchd 拉起 <span class="who">系统</span></div></div>
+        <div class="row"><div class="t">02:56:12.2</div><div class="rail"><span class="dot"></span></div><div class="e">认证通过（<code>good authentication</code>） <span class="who">系统</span></div></div>
+        <div class="row" data-kind="bento"><div class="t">02:56:13.2</div><div class="rail"><span class="dot"></span></div><div class="e">镜像开启，display 2 并入主屏 <span class="who">Bento</span></div></div>
+        <div class="row" data-kind="bento"><div class="t">02:56:13.6</div><div class="rail"><span class="dot"></span></div><div class="e">主屏切到 1512×982 HiDPI <span class="who">Bento</span></div></div>
+        <div class="row" data-kind="bento"><div class="t">02:56:13.9</div><div class="rail"><span class="dot"></span></div><div class="e">Dock 重启（移到左侧、关闭自动隐藏） <span class="who">Bento</span></div></div>
+        <div class="row"><div class="t">02:56:48.8</div><div class="rail"><span class="dot"></span></div><div class="e">主屏模式被改回 1704×959。日志显示这次变更不是 Bento 发起的 <span class="who">系统</span></div></div>
+        <div class="row"><div class="t">03:05:57.7</div><div class="rail"><span class="dot"></span></div><div class="e">最后一个观看端断开，<code>screensharingd</code> 退出 <span class="who">系统</span></div></div>
+        <div class="row" data-kind="bento"><div class="t">03:06:01.3</div><div class="rail"><span class="dot"></span></div><div class="e">确认断开，屏保启动（锁屏） <span class="who">Bento</span></div></div>
+        <div class="row" data-kind="bento"><div class="t">03:06:02.0</div><div class="rail"><span class="dot"></span></div><div class="e">Dock 重启（恢复原位）；分辨率与 gamma 一并恢复 <span class="who">Bento</span></div></div>
+        <div class="row" data-kind="fail"><div class="t">同上</div><div class="rail"><span class="dot"></span></div><div class="e">镜像没有拆回扩展，而快照被清空 —— 自愈依据一并消失。两块屏此后一直停在镜像组里 <span class="who">Bento · 缺陷</span></div></div>
+      </div>
+      <div class="prose">
+        <p>断开确认比 <code>screensharingd</code> 退出晚约四秒，符合两轮轮询加延迟的设计。锁屏、Dock、分辨率三项都正确恢复了。唯一失败的是镜像，而它失败得很安静：日志里写的是「已解除」。</p>
+      </div>
+    </section>
+
+    <section id="status">
+      <h2>发现总览</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>编号</th><th>严重度</th><th>状态</th><th>提交</th><th>问题</th></tr></thead>
+          <tbody>
+            <tr><td class="nw"><a href="#M-1">M-1</a></td><td class="nw"><span class="chip" data-sev="critical">严重</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">b17e1b2</td><td>硬件镜像组里 <code>CGDisplayMirrorsDisplay</code> 恒为 0，镜像永远拆不掉且快照被清</td></tr>
+            <tr><td class="nw"><a href="#R-1">R-1</a></td><td class="nw"><span class="chip" data-sev="critical">严重</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">f480791</td><td>netstat 在 macOS 27 输出空表，屏幕共享探测永久失效且无 UI 提示</td></tr>
+            <tr><td class="nw"><a href="#R-2">R-2</a></td><td class="nw"><span class="chip" data-sev="high">高</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">3db76ad</td><td>分辨率切换无门槛，会把外接主屏切走（实测已发生）</td></tr>
+            <tr><td class="nw"><a href="#R-3">R-3</a></td><td class="nw"><span class="chip" data-sev="high">高</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">3db76ad</td><td>撤黑不校验是否真的锁定，固定等 1.2 秒</td></tr>
+            <tr><td class="nw"><a href="#T-1">T-1</a></td><td class="nw"><span class="chip" data-sev="high">高</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">3db76ad</td><td>事件 tap 回调里的辅助功能调用无超时，卡死的 App 会冻结全系统鼠标</td></tr>
+            <tr><td class="nw"><a href="#M-2">M-2</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">b17e1b2</td><td>睡眠中的显示器无法重配置，且恢复失败后没有任何重试</td></tr>
+            <tr><td class="nw"><a href="#R-8">R-8</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">3db76ad</td><td>探测健康度只进日志不进界面</td></tr>
+            <tr><td class="nw"><a href="#X-4">X-4</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="done">已修复</span></td><td class="nw mono">3db76ad</td><td>单实例守卫静默退出，新构建装上却起不来</td></tr>
+            <tr><td class="nw"><a href="#X-7">X-7</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="done">部分修复</span></td><td class="nw mono">3db76ad</td><td>文档与代码不符（CLAUDE.md 已更正，README 仍有漂移）</td></tr>
+            <tr><td class="nw"><a href="#R-4">R-4</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>先做镜像/分辨率/Dock 才压黑，重活期间桌面可见</td></tr>
+            <tr><td class="nw"><a href="#R-5">R-5</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>施加与撤销顺序不是后进先出</td></tr>
+            <tr><td class="nw"><a href="#R-6">R-6</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>分辨率快照的「不覆盖」规则不区分显示器</td></tr>
+            <tr><td class="nw"><a href="#R-7">R-7</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>探测只看进程名，端口扫描即可触发熄屏与锁屏</td></tr>
+            <tr><td class="nw"><a href="#T-2">T-2</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>甩动手势按几何判定，浏览器标签页拖拽会误触发最大化</td></tr>
+            <tr><td class="nw"><a href="#X-1">X-1</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>Swift 运行时 trap 不进 error.log</td></tr>
+            <tr><td class="nw"><a href="#X-2">X-2</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>零自动化测试，熄屏路径没有演练入口</td></tr>
+            <tr><td class="nw"><a href="#X-8">X-8</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>熄屏本身不留日志痕迹，事后无法确认屏幕是否真的黑过</td></tr>
+            <tr><td class="nw"><a href="#minor">其余 10 条</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>体验瑕疵与工程卫生，见「零散项」</td></tr>
+            <tr><td class="nw"><a href="#icons">I-1…I-3</a></td><td class="nw"><span class="chip" data-sev="info">提示</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td class="nw">—</td><td>已停用的图标管理模块，重新启用前需处理</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="fixed">
+      <h2>已修复</h2>
+
+      <article class="finding" id="M-1" data-sev="critical">
+        <div class="head"><span class="chip" data-sev="critical">严重</span><span class="chip" data-st="done">已修复 b17e1b2</span><span class="id">M-1</span><h3>硬件镜像组里镜像永远拆不掉，而快照被清空</h3></div>
+        <div class="kv">
+          <div class="k">位置</div><div class="v loc">Sources/ScreenController.swift，原 restoreExtendedDisplays / restoreMirrorTargets / enableMirroring 三处判断</div>
+          <div class="k">问题</div><div class="v"><p><code>CGDisplayMirrorsDisplay</code> 只在<b>软件</b>镜像里返回主屏 ID。系统把两块 Studio Display 合并时走的是<b>硬件</b>镜像组，这个函数对组内每块屏（含从屏）都返回 <code>kCGNullDirectDisplay</code>。而解除镜像的三处分支全部以「不等于 <code>kCGNullDirectDisplay</code>」为条件，于是没有任何屏被判定需要解除。</p><p>后果是连锁的：<code>restored</code> 为空 → 取消配置 → <b>清空快照</b> → 日志写「Mirroring already disabled」。快照一清，自愈依据也没了，菜单里的「恢复扩展显示器」因为用同一个判断也是空转。两块屏就此永久停在镜像组里。</p></div>
+          <div class="k">发现</div><div class="v"><p>静态审计没有发现它。它只在镜像真正执行过之后才暴露，而审计时这条路径从未运行。是物主指出「今天通过屏幕共享连进来过」，顺着这条线查统一日志才找到。</p></div>
+          <div class="k">修复</div><div class="v"><ul>
+            <li>新增 <code>isMirrored()</code>（<code>CGDisplayIsInMirrorSet</code>），作为「是否需要拆」的唯一判据。</li>
+            <li>快照新增 <code>preMirrored</code>：记录拍快照时本来就在镜像组里的屏，恢复时原样不动，不去毁掉用户自己开的镜像。</li>
+            <li>只有确认没有屏残留在镜像组时才清快照，否则保留并记日志。</li>
+          </ul></div>
+        </div>
+      </article>
+
+      <article class="finding" id="R-1" data-sev="critical">
+        <div class="head"><span class="chip" data-sev="critical">严重</span><span class="chip" data-st="done">已修复 f480791</span><span class="id">R-1</span><h3>屏幕共享探测永久失效，界面却一直显示「监控中」</h3></div>
+        <div class="kv">
+          <div class="k">问题</div><div class="v"><p>探测靠解析 <code>netstat -an -p tcp</code> 找 5900 端口的 ESTABLISHED 连接。macOS 27 上 <code>net.inet.tcp.pcblist*</code> 这组 sysctl 已不存在，netstat 对任何非 root 进程都输出空表（本次实测 0 行），探测永远返回「未知」。物主的远程会话正是屏幕共享，所以整条链路六周内一次都没触发。</p></div>
+          <div class="k">证据</div><div class="v"><p>error.log 里「netstat 探测不可用」出现四次，正好是每次启动：07-30、08-25 两次、09-04。六周里这条信息只进了日志。</p></div>
+          <div class="k">修复</div><div class="v"><p>改用 <code>pgrep -x screensharingd</code>。该守护进程由 launchd 在连接被接受时拉起、最后一个观看端断开约 15 秒后退出，退出码语义与 RustDesk 那一路完全一致。必须用 <code>-x</code> 精确匹配，否则会误报常驻的 <code>ScreenSharingSubscriber</code>。健康度上报见 <a href="#R-8">R-8</a>。</p></div>
+        </div>
+      </article>
+
+      <article class="finding" id="R-2" data-sev="high">
+        <div class="head"><span class="chip" data-sev="high">高</span><span class="chip" data-st="done">已修复 3db76ad</span><span class="id">R-2</span><h3>分辨率切换没有门槛，会把外接主屏切走</h3></div>
+        <div class="kv">
+          <div class="k">问题</div><div class="v"><p>目标 1512×982 HiDPI 是 14 寸 MacBook Pro 内置屏的模式。用与代码相同的匹配条件枚举，两块 Studio Display 的模式表里<b>都有</b>这一档。当时的 CLAUDE.md 断言「本机不存在该模式，这一步是无害的空操作」，是错的。</p></div>
+          <div class="k">实证</div><div class="v"><p>02:56:13 的日志：<code>kCGSDisplayConfigMode 38</code> → <code>1512×982</code>。切换确实发生了。</p></div>
+          <div class="k">修复</div><div class="v"><p>只在主屏是内置屏时执行（<code>CGDisplayIsBuiltin</code>）。这台 Mac 没有内置屏，该步骤成为真正的空操作；MacBook 上行为不变。恢复路径不设门槛，旧快照照常恢复。CLAUDE.md 的错误断言已更正。</p></div>
+        </div>
+      </article>
+
+      <article class="finding" id="R-3" data-sev="high">
+        <div class="head"><span class="chip" data-sev="high">高</span><span class="chip" data-st="done">已修复 3db76ad</span><span class="id">R-3</span><h3>撤黑不校验是否真的锁定</h3></div>
+        <div class="kv">
+          <div class="k">问题</div><div class="v"><p><code>open -a ScreenSaverEngine</code> 退出码 0 只说明 LaunchServices 接受了请求，既不代表屏保已盖上，也不代表已上锁（取决于「屏保开始后要求密码」的延迟设置）。代码不校验，固定 1.2 秒后无条件撤黑。本机当前设置是「立即」，所以现在成立，但这是没被代码守住的隐私前提。</p></div>
+          <div class="k">修复</div><div class="v"><p>每 0.25 秒查一次会话字典的 <code>CGSSessionScreenIsLocked</code>，并接收 <code>com.apple.screenIsLocked</code> 分布式通知作第二路信号，确认后 0.3 秒撤黑。六秒内未确认则记日志、状态行标注「上次断开后锁屏未确认」，然后照旧撤黑：一直黑着会让本地用户连菜单都看不见，比裸露更糟。</p></div>
+        </div>
+      </article>
+
+      <article class="finding" id="T-1" data-sev="high">
+        <div class="head"><span class="chip" data-sev="high">高</span><span class="chip" data-st="done">已修复 3db76ad</span><span class="id">T-1</span><h3>辅助功能调用没有超时，会冻结全系统鼠标</h3></div>
+        <div class="kv">
+          <div class="k">问题</div><div class="v"><p>分屏的事件 tap 处在 HID 事件链上：回调返回前，整个登录会话的鼠标事件都排在后面。双击标题栏时回调同步调用辅助功能接口，而进程从未设过消息超时，默认约六秒。目标 App 转菊花时，这几次调用会逐个等满超时，表现为全系统鼠标冻结数秒。</p></div>
+          <div class="k">修复</div><div class="v"><p><code>WindowManager.init</code> 里对系统级元素设进程级超时 0.5 秒，对之后所有辅助功能调用生效。正常 App 的往返是毫秒级，会撞上 0.5 秒的只有不响应的 App，而那时放行点击正是应有的结果。</p></div>
+        </div>
+      </article>
+
+      <article class="finding" id="M-2" data-sev="medium">
+        <div class="head"><span class="chip" data-sev="medium">中</span><span class="chip" data-st="done">已修复 b17e1b2</span><span class="id">M-2</span><h3>睡眠中的显示器无法重配置，且恢复失败后没有重试</h3></div>
+        <div class="kv">
+          <div class="k">问题</div><div class="v"><p>验证 M-1 的修复时实测：两块屏 <code>CGDisplayIsActive</code> 为假时，逐个 <code>CGConfigureDisplayMirrorOfDisplay</code> 都返回成功，<code>CGCompleteDisplayConfiguration</code> 却整体失败（错误 1014）。而空闲轮询的镜像清理是边沿触发的，断开那一刻屏幕若正好睡着，一次失败之后就再也没有第二次尝试。</p></div>
+          <div class="k">修复</div><div class="v"><p>两条恢复路径在检测到任一显示器睡眠时提前让路并保留快照；空闲轮询在 <code>hasPendingMirrorRestore</code> 为真时持续重试，屏幕唤醒后自动补上。</p></div>
+        </div>
+      </article>
+
+      <article class="finding" id="R-8" data-sev="medium">
+        <div class="head"><span class="chip" data-sev="medium">中</span><span class="chip" data-st="done">已修复 3db76ad</span><span class="id">R-8</span><h3>探测健康度只进日志不进界面</h3></div>
+        <div class="kv">
+          <div class="k">问题</div><div class="v"><p>R-1 之所以能沉默六周，是因为失效只写 error.log，状态行始终是「监控中」。下一次探测手段失效会以同样的方式沉默。</p></div>
+          <div class="k">修复</div><div class="v"><p>按路记录连续「未知」的轮数，连续 10 轮（30 秒）即判定该来源失效：状态行追加「屏幕共享探测不可用」，状态栏图标换成带警告角标的样式，恢复时再记一条日志。</p></div>
+        </div>
+      </article>
+
+      <article class="finding" id="X-4" data-sev="low">
+        <div class="head"><span class="chip" data-sev="low">低</span><span class="chip" data-st="done">已修复 3db76ad</span><span class="id">X-4</span><h3>单实例守卫静默退出，新构建装上却起不来</h3></div>
+        <div class="kv">
+          <div class="k">问题</div><div class="v"><p>旧实例还在运行时启动新实例，新实例直接 <code>exit(0)</code>，不留任何痕迹。而 <code>open Bento.app</code> 对着已在运行的同路径 App 只会激活旧实例。表现就是「重新构建了，但改动没生效」。</p></div>
+          <div class="k">修复</div><div class="v"><p>退出前同步写一行日志；SIGTERM 转成正常退出流程，使收尾逻辑不被跳过；<code>build_app.sh</code> 新增 <code>--relaunch</code>，构建后退出旧实例再启动新包。</p></div>
+        </div>
+      </article>
+
+      <article class="finding" id="X-7" data-sev="low">
+        <div class="head"><span class="chip" data-sev="low">低</span><span class="chip" data-st="done">部分修复</span><span class="id">X-7</span><h3>文档与代码不符</h3></div>
+        <div class="kv">
+          <div class="k">已更正</div><div class="v"><p>CLAUDE.md 里 1512×982 的错误断言、锁屏语义、镜像判据、AX 超时、重启方式均已同步。</p></div>
+          <div class="k">仍有漂移</div><div class="v"><ul>
+            <li>README 写「⌘ + 拖动标题栏吸附」，代码只认 Shift。</li>
+            <li>README 写双击取重叠面积最大的格子，代码取点击点所在格子。</li>
+            <li>README 未提 Shift 双击铺满与甩动手势。</li>
+            <li>README 的图标管理整节描述的是已停用的模块。</li>
+            <li>README 说授权后需退出重开，实际菜单里有「重新检测滚动权限」。</li>
+            <li>CLAUDE.md 防睡段写的键名是 <code>SleepGuardDefaultMinutes</code>，代码里是 <code>SleepGuardCustomMinutes</code>。</li>
+          </ul></div>
+        </div>
+      </article>
+    </section>
+
+    <section id="open">
+      <h2>待处理</h2>
+
+      <article class="finding" id="R-4" data-sev="medium">
+        <div class="head"><span class="chip" data-sev="medium">中</span><span class="id">R-4</span><h3>连接时先做重活才压黑，期间桌面可见</h3></div>
+        <div class="kv">
+          <div class="k">位置</div><div class="v loc">Sources/AppDelegate.swift，applyConnected</div>
+          <div class="k">问题</div><div class="v"><p>顺序是镜像、分辨率、Dock，最后才 <code>setBlack()</code>。这些是同步的显示重配置与五个子进程创建。实测 02:56 那次，从连接被接受到 Dock 重启用了约三秒，期间屏幕黑闪、重排，真实桌面对旁人可见。gamma 压黑本身是即时且廉价的。</p></div>
+          <div class="k">建议</div><div class="v"><p>先 <code>setBlack()</code> 再做重活。现有的屏幕参数观察者已经会在重配置完成后重压 gamma，顺序可以直接调换，不需要新机制。</p></div>
+        </div>
+      </article>
+
+      <article class="finding" id="R-5" data-sev="medium">
+        <div class="head"><span class="chip" data-sev="medium">中</span><span class="id">R-5</span><h3>施加与撤销顺序不是后进先出</h3></div>
+        <div class="kv">
+          <div class="k">问题</div><div class="v"><ul>
+            <li>分辨率快照是在开启镜像<b>之后</b>读的。若镜像组把主屏调到公共模式，记录的「原始模式」就是镜像后的模式。</li>
+            <li>恢复时显示器还在镜像组里，组内可用模式列表可能不含原模式，此时代码会永久丢弃快照。</li>
+            <li>崩溃恢复路径只回滚分辨率与 Dock，镜像要等首轮轮询；若远程熄屏总开关是关的，镜像残留没有自动清理。</li>
+          </ul><p>本机两块显示器型号相同，镜像不改变模式列表，当前不会触发；接不同型号显示器时会。</p></div>
+          <div class="k">建议</div><div class="v"><p>施加顺序改为快照分辨率、镜像、分辨率、Dock；撤销严格反序。显示器在镜像组里时不要以「模式不在列表」为由丢弃快照，只推迟。崩溃恢复里一并解除镜像。</p></div>
+        </div>
+      </article>
+
+      <article class="finding" id="R-6" data-sev="medium">
+        <div class="head"><span class="chip" data-sev="medium">中</span><span class="id">R-6</span><h3>分辨率快照的「不覆盖」规则不区分显示器</h3></div>
+        <div class="kv">
+          <div class="k">问题</div><div class="v"><p><code>hasResolutionSnapshot()</code> 只看键是否存在。若某次会话在外接屏为主屏时崩溃，快照属于外接屏；拔掉该屏后再来一次会话，代码不再为新主屏保存快照，却照样切换它，而恢复找的是离线的外接屏。新主屏的原始分辨率从此没有任何记录。</p></div>
+          <div class="k">现状</div><div class="v"><p>内置屏门槛（R-2）让快照只可能属于内置屏，这条在当前代码下已很难触发，但规则本身仍不正确。</p></div>
+          <div class="k">建议</div><div class="v"><p>比对快照里的 UUID 与本次目标显示器，属于别的显示器时拒绝切换本屏。</p></div>
+        </div>
+      </article>
+
+      <article class="finding" id="R-7" data-sev="medium">
+        <div class="head"><span class="chip" data-sev="medium">中</span><span class="id">R-7</span><h3>探测只看进程名，端口扫描即可触发熄屏与锁屏</h3></div>
+        <div class="kv">
+          <div class="k">问题</div><div class="v"><ul>
+            <li><code>pgrep -fi "rustdesk.*--cm"</code> 匹配任意命令行含该模式的进程，本地进程改个名就能触发整条链路。</li>
+            <li><code>screensharingd</code> 在 TCP 连接被接受时、<b>认证之前</b>就被拉起。局域网里的扫描器、NAS、手机 App 探一次 5900 端口，本地正在工作的用户就会经历黑屏、镜像合并、Dock 挪走，约二十秒后被锁屏。</li>
+          </ul><p>这条在探测修好之后才真正有意义，此前那一路根本不会响应。</p></div>
+          <div class="k">建议</div><div class="v"><p>拿到 pid 后用 <code>proc_pidpath</code> 校验可执行文件路径。屏幕共享这一路可再叠一个「已认证会话」信号，或对连接建立也要求两轮确认，避免三秒内自结束的扫描触发整套动作。</p></div>
+        </div>
+      </article>
+
+      <article class="finding" id="T-2" data-sev="medium">
+        <div class="head"><span class="chip" data-sev="medium">中</span><span class="id">T-2</span><h3>甩动手势按几何判定，浏览器标签页拖拽会误触发最大化</h3></div>
+        <div class="kv">
+          <div class="k">位置</div><div class="v loc">Sources/WindowTiling.swift，handleMouseUp 与 isUpwardFlick / isWiggle</div>
+          <div class="k">问题</div><div class="v"><p>「标题栏带」是窗口顶部 28 点的纯几何区域，浏览器标签栏和 Electron 自定义标题栏都落在里面。把一个标签页快速向上拖出去分离成新窗口，轨迹正好满足「0.3 秒内上移 60 点、速度 200 点每秒」，源窗口会被最大化。缩放带路径已经用 AX 尺寸比对区分了滚动条拖拽，移动路径没有对等的校验。</p></div>
+          <div class="k">建议</div><div class="v"><p>抬起时比对该窗口在窗口列表里的位置与按下时的差值。窗口没有跟着光标位移，就不是窗口拖动。窗口列表缓存已有，零额外开销。</p></div>
+        </div>
+      </article>
+
+      <article class="finding" id="X-1" data-sev="medium">
+        <div class="head"><span class="chip" data-sev="medium">中</span><span class="id">X-1</span><h3>Swift 运行时 trap 不进 error.log</h3></div>
+        <div class="kv">
+          <div class="k">问题</div><div class="v"><p>强制解包、整数溢出、数组越界这类 trap 走 SIGTRAP 或 SIGILL，不经过 ObjC 异常处理器。CLAUDE.md 承诺的「未处理异常写 error.log」只对 ObjC 异常成立，一次 Swift 崩溃在日志里完全无痕。</p></div>
+          <div class="k">建议</div><div class="v"><p>用 <code>sigaction</code> 接几个致命信号，处理器内只用异步信号安全的 <code>write</code> 往预先打开的 fd 写一行标记，然后恢复默认处理器再抛出，让系统崩溃报告照常生成。</p></div>
+        </div>
+      </article>
+
+      <article class="finding" id="X-2" data-sev="medium">
+        <div class="head"><span class="chip" data-sev="medium">中</span><span class="id">X-2</span><h3>零自动化测试，熄屏路径没有演练入口</h3></div>
+        <div class="kv">
+          <div class="k">问题</div><div class="v"><p>大量逻辑不依赖 UI，本可直接单测：布局树的操作与容错解码、两个甩动判定、探测三态到状态机的流转、快照的不覆盖规则。而整条熄屏链路至今只被真实会话验证过一次，唯一的验证方式是让人远程连进来，或让局域网扫一下 5900 端口，后者会直接黑屏加锁屏。</p></div>
+          <div class="k">建议</div><div class="v"><ul>
+            <li>菜单加一项「模拟远程连接」，走完整的镜像、Dock、压黑、锁定确认、恢复流程，不依赖真实连接。</li>
+            <li>把纯逻辑抽到不引用 AppKit 的文件，加一个 <code>./build_app.sh --test</code>。</li>
+          </ul></div>
+        </div>
+      </article>
+
+      <article class="finding" id="X-8" data-sev="low">
+        <div class="head"><span class="chip" data-sev="low">低</span><span class="id">X-8</span><h3>熄屏本身不留日志痕迹</h3></div>
+        <div class="kv">
+          <div class="k">问题</div><div class="v"><p>镜像、分辨率、Dock 三项在统一日志里都留下了可核对的痕迹，唯独 gamma 压黑没有：<code>CGSetDisplayTransferByFormula</code> 不产生任何日志。本次审计因此无法从日志确认 02:56 那次屏幕是否真的黑了，只能从代码路径推断。对一个隐私工具，这是最该能事后核对的一件事。</p></div>
+          <div class="k">建议</div><div class="v"><p>压黑与撤黑各记一行 <code>NSLog</code>，带上成功的显示器数量。成本为零，且直接支撑 R-8 的健康度判断。</p></div>
+        </div>
+      </article>
+
+      <h3 id="minor" style="padding-top:8px">零散项</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>编号</th><th>位置</th><th>问题与建议</th></tr></thead>
+          <tbody>
+            <tr><td class="nw">S-1</td><td class="nw mono">ScrollReverser</td><td>每次重建 tap（含唤醒自愈）都带权限弹窗。只在首次启动与手动重试时传 prompt。</td></tr>
+            <tr><td class="nw">S-2</td><td class="nw mono">AppDelegate · build_app.sh</td><td>权限提示框与 Info.plist 用途说明是英文，其余界面全中文。统一为中文。</td></tr>
+            <tr><td class="nw">T-3</td><td class="nw mono">WindowTiling</td><td>显示器参数一变就丢弃未保存的布局编辑。显示器休眠唤醒也会发这个通知。保留工作副本，只在屏幕集合真的变了时才关闭。</td></tr>
+            <tr><td class="nw">T-4</td><td class="nw mono">WindowTiling</td><td>编辑器的本地键盘监听拦截整个进程的 Esc 与回车。判断当前键窗口再处理。</td></tr>
+            <tr><td class="nw">T-5</td><td class="nw mono">WindowTiling</td><td>负缓存键只防非有限坐标，超大有限值仍会在 <code>Int()</code> 处 trap。先钳制再转换。</td></tr>
+            <tr><td class="nw">R-9</td><td class="nw mono">ScreenController</td><td>目标模式取列表第一个匹配，不比对当前刷新率。加入刷新率条件。</td></tr>
+            <tr><td class="nw">R-10</td><td class="nw mono">AppDelegate · ScreenController</td><td>退出时同步等待 Dock 队列，最坏约五十秒，注销与关机会被拖慢。给一个总预算，超时放行，下次启动的崩溃恢复会补救。</td></tr>
+            <tr><td class="nw">X-3</td><td class="nw mono">Support</td><td>ErrorLog 没有按消息限速。当前日志里 97% 的行是同一条重复。按消息模板做限速，恢复时补一行「重复 N 次」。</td></tr>
+            <tr><td class="nw">X-5</td><td class="nw mono">build_app.sh</td><td>CFBundleVersion 固定 1.0，无法区分构建。写入短提交号，启动时记一行。</td></tr>
+            <tr><td class="nw">X-6</td><td class="nw mono">build_app.sh</td><td>缺 NSAppleEventsUsageDescription，而 FileVault 免密重启经 osascript 控制终端。加上无副作用。</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="icons" style="padding-top:8px">图标管理模块（已停用）</h3>
+      <div class="prose">
+        <p>该模块 1695 行，占代码约 29%，<code>featureEnabled</code> 为假，完全不运行。这是一个决定题：要么恢复，要么移到分支只留文档指针。保持现状的代价是每次审阅都要读一遍。重新启用前需处理三条：</p>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>编号</th><th>问题</th></tr></thead>
+          <tbody>
+            <tr><td class="nw">I-1</td><td>合成点击前会向系统投递一次 ESC 按键，会发给当前前台 App，可能取消正在编辑的对话框或输入法候选。应只在检测到状态项菜单确实打开时才发。</td></tr>
+            <tr><td class="nw">I-2</td><td>持久化的名字缓存按中文全角逗号截断，系统模块的描述用的是英文逗号，截断没生效。实证：<code>module:WiFi</code> 存成了 <code>"Wi‑Fi, connected, 3 bars"</code>，信号格数被写进了磁盘。</td></tr>
+            <tr><td class="nw">I-3</td><td>没有隐藏项时「溢出条是否展开」返回真，导致顺序采纳与真实布局校验被永久跳过，清单顺序会与真实菜单栏脱节。应把「无按钮」与「已展开」分成两个返回值。</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="sound">
+      <h2>判定稳妥的部分</h2>
+      <p class="prose" style="color:var(--muted)">审计不只找问题。以下机制逐一核对过，判定为正确且值得保持：</p>
+      <ul class="ok-list prose">
+        <li>三处快照统一遵守「先落盘再改动、已有不覆盖、成功才清、坏数据记日志并删除」，并在启动时回滚残留。M-1 的教训不是规则错，而是判据错。</li>
+        <li>探测三态、断开只看激活来源、两轮确认、锁屏优先、可取消的延迟撤黑加代际令牌。这一组状态机没有找到竞态，02:56 那次会话的实际行为与设计完全一致。</li>
+        <li><code>runProcess</code> 的看门狗保证轮询队列永不被子进程钉死；<code>ErrorLog.logSync</code> 用 DispatchSpecificKey 避免了在日志队列内部崩溃时的自等待死锁。</li>
+        <li>线程归属清晰：分屏、滚动、防睡的状态只在主线程改，AX 写入与重试睡眠在专用队列，Dock 的五个子进程在自己的串行队列，图标管理用不可变快照跨线程发布。</li>
+        <li>滚动反转用 <code>0 &amp;- x</code> 规避最小值取负溢出；分屏在强转 AXValue 前校验类型 ID；字典构造用 <code>uniquingKeysWith</code> 防重复键 trap。</li>
+        <li>防睡：一律墙钟定时器；powerd 侧超时释放兜底；到期与唤醒都先判活再决定是否本地释放；激活状态不持久化。整个模块没有发现缺陷。</li>
+        <li>两个事件 tap 都不监听键盘，且 tap 被禁用时都能自愈。</li>
+        <li>签名脚本：随机钥匙串口令存 0600 文件、私钥导入后即删、身份找不到时拒绝自动重建以保住授权、签完立即校验。</li>
+        <li>分屏配置逐条容错解码、原子写入；显示器键用 CGDisplay UUID 而非 displayID。</li>
+      </ul>
+    </section>
+
+    <section id="evidence">
+      <h2>附录：证据</h2>
+      <div class="prose"><p>只读命令的原始输出，2026-09-08 采集。</p></div>
+
+      <h3>netstat 对非 root 进程输出空表</h3>
+<pre class="evidence">$ /usr/sbin/netstat -an -p tcp | wc -l
+       0</pre>
+
+      <h3>两块显示器都有 1512×982 HiDPI（与代码相同的匹配条件）</h3>
+<pre class="evidence">osVersionString=Version 27.0 (Build 26A5425a)
+display id=1 main=true  uuid=C309100B-… bounds=(0,0,1704,959)    modes=221 has1512x982HiDPI=true
+display id=2 main=false uuid=8B0B83D2-… bounds=(1704,0,1704,959) modes=221 has1512x982HiDPI=true</pre>
+
+      <h3>会话中的镜像与分辨率变更（统一日志，进程 Bento）</h3>
+<pre class="evidence">02:56:13.238  SLSCompleteDisplayConfigurationWithOption: Display 0x2: kCGSDisplayConfigMirror on
+02:56:13.558  Display 0x1: Mode 53, [1704 x 959], active
+02:56:13.558  Display 0x2: Mode 225, [1704 x 958], inactive     ← 已并入镜像组
+02:56:13.581  SLSCompleteDisplayConfigurationWithOption: Display 0x1: kCGSDisplayConfigMode 38
+02:56:13.885  Display 0x1: Mode 38, [1512 x 982], active        ← 分辨率确实切了
+02:56:48.800  Display 0x1: Mode 53, [1704 x 959], active        ← 非 Bento 发起
+（02:56:30 之后 Bento 再无任何 SLSCompleteDisplayConfiguration）</pre>
+
+      <h3>会话结束与恢复</h3>
+<pre class="evidence">03:05:42.719  screensharingd: create gExitTimerRef
+03:05:57.723  screensharingd: No viewers so time to exit
+03:06:01.323  ScreenSaverEngine 启动                            ← Bento 锁屏
+03:06:02      Dock 重启（pid 73981）                             ← Bento 恢复 Dock</pre>
+
+      <h3>镜像残留（会话结束约 40 分钟后）</h3>
+<pre class="evidence">display 1: bounds=(0,0,1704,959) inMirrorSet=true  mirrorsDisplay=0  isActive=false isAsleep=true
+display 2: bounds=(0,0,1704,958) inMirrorSet=true  mirrorsDisplay=0  isActive=false
+
+mirrorsDisplay 全为 0 —— 旧代码的解除判据正是「不等于 0」，因此一个都不匹配。
+inMirrorSet 才是真相。</pre>
+
+      <h3>睡眠中的显示器无法重配置</h3>
+<pre class="evidence">configure display 2 -> null: ok
+CGCompleteDisplayConfiguration: err 1014 (1 块)
+（逐个配置都返回成功，整体提交失败）</pre>
+
+      <h3>error.log 构成（1,086 行）</h3>
+<pre class="evidence">1056  图标管理: 回写字典（… 该隐未隐 …）        ← 同一条消息，12 秒一次
+   6  图标管理: 回写字典（清理幻影键 N 个）
+   4  远程检测: netstat 探测不可用 …             ← 每次启动一条，共六周
+   4  图标管理: 回写字典（可见顺序不符）</pre>
+    </section>
+
+    <footer>
+      审计与修复均在 2026-09-08 完成。已修复项对应提交 f480791、3db76ad、b17e1b2。
+      本报告随代码一同版本化，后续审计请另开文件而非覆盖本文。
+    </footer>
+  </main>
+</div>
