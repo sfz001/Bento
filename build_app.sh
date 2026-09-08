@@ -159,8 +159,11 @@ if [ "${1:-}" = "--check" ]; then
 fi
 
 # 默认只编本机的 arm64（构建时间减半）；需要双架构时 BUILD_UNIVERSAL=1 ./build_app.sh
+mkdir -p "$SCRIPT_DIR/.build"
+clang -std=c11 -Wall -Wextra -Werror -target arm64-apple-macosx14.0 \
+    -c "$SCRIPT_DIR/Sources/CrashSignal.c" -o "$SCRIPT_DIR/.build/CrashSignal_arm64.o"
 echo "Compiling $APP_NAME (arm64)..."
-swiftc "$SCRIPT_DIR"/Sources/*.swift \
+swiftc "$SCRIPT_DIR"/Sources/*.swift "$SCRIPT_DIR/.build/CrashSignal_arm64.o" \
     -O \
     -o "$SCRIPT_DIR/${APP_NAME}_arm64" \
     -target arm64-apple-macosx14.0 \
@@ -168,8 +171,10 @@ swiftc "$SCRIPT_DIR"/Sources/*.swift \
     -framework CoreGraphics \
     -framework IOKit
 if [ "${BUILD_UNIVERSAL:-0}" = "1" ]; then
+    clang -std=c11 -Wall -Wextra -Werror -target x86_64-apple-macosx14.0 \
+        -c "$SCRIPT_DIR/Sources/CrashSignal.c" -o "$SCRIPT_DIR/.build/CrashSignal_x86_64.o"
     echo "Compiling $APP_NAME (x86_64)..."
-    swiftc "$SCRIPT_DIR"/Sources/*.swift \
+    swiftc "$SCRIPT_DIR"/Sources/*.swift "$SCRIPT_DIR/.build/CrashSignal_x86_64.o" \
         -O \
         -o "$SCRIPT_DIR/${APP_NAME}_x86_64" \
         -target x86_64-apple-macosx14.0 \

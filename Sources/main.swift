@@ -14,6 +14,8 @@ if let existing = duplicateInstances.first {
     exit(0)
 }
 
+CrashLogging.install()
+
 // 未处理异常写日志，便于事后排查
 NSSetUncaughtExceptionHandler { exception in
     // 必须同步写：处理器返回后进程就 abort，异步队列块来不及落盘

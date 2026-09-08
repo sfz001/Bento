@@ -25,7 +25,7 @@ open Bento.app             # Run
 
 **A plain `open Bento.app` while Bento is already running only activates the old instance** — the new build never starts. Use `--relaunch`, or quit from the menu first. A second instance launched by other means logs one line to error.log and exits.
 
-Build requires macOS 14.0+ SDK. Uses `swiftc` directly (no Xcode project/SPM). Frameworks: AppKit, CoreGraphics, IOKit (IOKit is used only by ScrollReverser).
+Build requires macOS 14.0+ SDK. Uses `swiftc` directly plus `clang` for `Sources/CrashSignal.c` (no Xcode project/SPM). Frameworks: AppKit, CoreGraphics, IOKit (IOKit is used only by ScrollReverser).
 
 ## Architecture
 
@@ -113,3 +113,5 @@ File-scope `private`/`fileprivate` declarations don't cross these file boundarie
 - 连接先压黑，再于镜像前保存内置屏分辨率快照，然后镜像、切分辨率、调整 Dock，最后重压 gamma。
 - 恢复先提交 Dock 还原任务、拆除 Bento 镜像，再恢复原始分辨率，最后撤黑。镜像或睡眠期间不丢弃分辨率快照；读取模式列表失败也保留。
 - 启动恢复包含镜像，不依赖远程监控开关；空闲轮询同时重试镜像和分辨率。恢复期间屏幕通知不再重新合并显示器。
+
+- 致命信号日志由 `CrashSignal.c` 处理：SIGTRAP/SIGILL/SIGABRT/SIGBUS/SIGSEGV/SIGFPE 使用异步信号安全的 open/write/close 写入当前 error.log，随后恢复默认信号处理并重发；不调用 Swift、Foundation、格式化器或日志队列。`CrashLogging.install()` 在启动时安装。
