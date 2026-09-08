@@ -806,6 +806,35 @@ class LayoutEditorSession: NSObject {
         windows.first?.makeKey()
     }
 
+    /// 重排编辑窗口，不重新读取配置或清空 working。短暂空屏列表（睡眠）也保留草稿。
+    func refreshScreens() {
+        let screens = NSScreen.screens.compactMap { screen -> (String, NSScreen)? in
+            guard let uuid = DisplayKeys.uuid(for: screen) else { return nil }
+            return (uuid, screen)
+        }
+        guard !screens.isEmpty else { return }
+        let ids = Set(screens.map { $0.0 })
+        for window in windows where !ids.contains(window.screenUUID) { window.close() }
+        windows.removeAll { !ids.contains($0.screenUUID) }
+        for (uuid, screen) in screens {
+            if let window = windows.first(where: { $0.screenUUID == uuid }) {
+                window.setFrame(screen.visibleFrame, display: true)
+                window.editorView.frame = CGRect(origin: .zero, size: screen.visibleFrame.size)
+                window.editorView.needsDisplay = true
+            } else {
+                let window = EditorWindow(screen: screen, uuid: uuid, layout: working[uuid] ?? .cell, session: self)
+                windows.append(window)
+                window.orderFrontRegardless()
+            }
+        }
+        if let activeUUID, !ids.contains(activeUUID) { self.activeUUID = screens.first?.0 }
+        if let toolbar, !screens.contains(where: { $0.1.visibleFrame.contains(toolbar.frame) }),
+           let screen = screens.first?.1 {
+            toolbar.setFrameOrigin(CGPoint(x: screen.visibleFrame.midX - toolbar.frame.width / 2,
+                                          y: screen.visibleFrame.maxY - toolbar.frame.height - 16))
+        }
+    }
+
     func end(save: Bool) {
         if let m = escMonitor {
             NSEvent.removeMonitor(m)
@@ -1087,8 +1116,8 @@ class TilingController: NSObject {
     }
 
     @objc private func screenParametersChanged() {
-        editor?.end(save: false)
         DisplayKeys.invalidateCache()
+        editor?.refreshScreens()
         hideOverlays()
         resetInputState()
     }
