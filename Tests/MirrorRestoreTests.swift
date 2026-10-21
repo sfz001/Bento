@@ -12,6 +12,7 @@ private enum Displays {
     static var applyChanges = true
     static var failReadAfterCommit = false
     static var configured: [CGDirectDisplayID] = []
+    static var lastTarget = kCGNullDirectDisplay
     static var commits = 0
     static let snapshotKey = "BentoMirrorSnapshot"
 
@@ -23,6 +24,7 @@ private enum Displays {
         applyChanges = true
         failReadAfterCommit = false
         configured = []
+        lastTarget = kCGNullDirectDisplay
         commits = 0
         let snapshot = "{\"entries\":[{\"displayID\":2,\"mirrorsDisplayID\":0}],\"preMirrored\":\(preMirrored ? "[2]" : "[]")}"
         UserDefaults.standard.set(Data(snapshot.utf8), forKey: snapshotKey)
@@ -49,15 +51,18 @@ func CGBeginDisplayConfiguration(_ config: inout CGDisplayConfigRef?) -> CGError
     return .success
 }
 func CGConfigureDisplayMirrorOfDisplay(_ config: CGDisplayConfigRef?, _ display: CGDirectDisplayID, _ target: CGDirectDisplayID) -> CGError {
-    precondition(target == kCGNullDirectDisplay)
+    precondition(target == kCGNullDirectDisplay || target == 1, "Mirror target must be the main display")
     Displays.configured.append(display)
+    Displays.lastTarget = target
     return Displays.configError
 }
 @discardableResult
 func CGCancelDisplayConfiguration(_ config: CGDisplayConfigRef?) -> CGError { .success }
 func CGCompleteDisplayConfiguration(_ config: CGDisplayConfigRef?, _ option: CGConfigureOption) -> CGError {
     Displays.commits += 1
-    if Displays.completeError == .success && Displays.applyChanges { Displays.mirrored = false }
+    if Displays.completeError == .success && Displays.applyChanges {
+        Displays.mirrored = Displays.lastTarget != kCGNullDirectDisplay
+    }
     return Displays.completeError
 }
 enum ErrorLog { static func log(_ message: String) {} }
@@ -132,6 +137,23 @@ struct MirrorRestoreTests {
 
         precondition(preexisting.restoreExtendedDisplays() == nil)
         precondition(Displays.commits == 1, "Already extended must be a no-op")
+        // A-3：休眠中不提交镜像配置、不留快照；醒着时照常合并
+        Displays.reset()
+        UserDefaults.standard.removeObject(forKey: Displays.snapshotKey)
+        Displays.mirrored = false
+        Displays.asleep = true
+        let enableAsleep = ScreenController()
+        precondition(!enableAsleep.enableMirroring(), "Asleep displays must not report mirroring success")
+        precondition(Displays.commits == 0 && Displays.configured.isEmpty,
+                     "Asleep displays must never receive a configuration commit")
+        precondition(!enableAsleep.hasPendingMirrorRestore, "No snapshot without a mutation")
+        Displays.asleep = false
+        precondition(enableAsleep.enableMirroring())
+        precondition(Displays.commits == 1 && Displays.configured == [2] && Displays.mirrored)
+        precondition(enableAsleep.hasPendingMirrorRestore, "Snapshot must exist once mirroring is applied")
+        precondition(enableAsleep.enableMirroring() && Displays.commits == 1,
+                     "Already mirrored must not commit again")
+
         let order = RestoreOrderSpy()
         order.restoreDisplaySettings()
         precondition(order.operations == ["mirror", "resolution"])

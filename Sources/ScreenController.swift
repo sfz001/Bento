@@ -58,10 +58,21 @@ class ScreenController {
     /// 2026-10-22 的会话里镜像两次失败、快照被清，error.log 一字未留
     @discardableResult
     func enableMirroring() -> Bool {
-        lastMirrorAttempt = Date()
         let displays = onlineDisplays()
         let main = CGMainDisplayID()
         guard displays.count > 1 else { return true }
+
+        // 休眠中的显示器一律不提交配置，连快照都不存（2026-10-22 审计 A-3）。
+        // 02:10 那次：第一次提交在休眠屏上挂起，11 秒后 didChangeScreenParameters 触发的
+        // reassertScreenOffState 又提交了一次，SkyLight 在本进程里忙等前一次重配置，
+        // 一分钟打了 708,650 行「Waiting for previous reconfig to complete」，进程被
+        // libsystem_trace 限流，之后的诊断日志全丢。会话中的补配交给轮询里的
+        // ensureMirroringWhileConnected：它先唤醒显示器，醒了才回到这里
+        guard !anyDisplayAsleep(displays) else {
+            ErrorLog.log("镜像: 显示器休眠中，暂不提交镜像配置（会话中由轮询唤醒后补配）")
+            return false
+        }
+        lastMirrorAttempt = Date()
 
         let hadSnapshot = hasMirrorSnapshot()
         if !hadSnapshot {
@@ -107,7 +118,8 @@ class ScreenController {
         if !hadSnapshot {
             clearMirrorSnapshot()
         }
-        // 1014 = 显示器休眠中无法重配置（本机 2026-09-08 / 2026-10-22 两次都是它）
+        // 1014 = 显示器休眠中无法重配置。上面已挡住提交前就在睡的情况，
+        // 这里仍可能碰上提交途中入睡
         ErrorLog.log("镜像: 提交显示配置失败 error=\(err.rawValue)"
             + (anyDisplayAsleep(displays) ? "（显示器休眠中）" : ""))
         return false
