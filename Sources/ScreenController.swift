@@ -195,6 +195,8 @@ class ScreenController {
     func resetMirrorRetries() {
         mirrorRetryFailures = 0
         loggedMirrorWake = false
+        restoreWakeRequests = 0
+        loggedRestoreWakeGiveUp = false
     }
 
     func disableMirroring(forceFallback: Bool = false) {
@@ -278,8 +280,10 @@ class ScreenController {
             return
         }
 
-        // 屏幕睡着时重配置必失败：保留快照，等轮询在唤醒后重试
+        // 屏幕睡着时重配置必失败：保留快照，等轮询在唤醒后重试。
+        // 会话已锁定时顺手把显示器叫醒，下一轮空闲轮询就能拆（见 requestWakeForMirrorRestore）
         guard !anyDisplayAsleep(displays) else {
+            requestWakeForMirrorRestore()
             NSLog("Mirroring restore deferred: display asleep")
             return
         }
@@ -402,6 +406,41 @@ class ScreenController {
     private func clearMirrorSnapshot() {
         savedMirrorState = nil
         UserDefaults.standard.removeObject(forKey: mirrorSnapshotDefaultsKey)
+        restoreWakeRequests = 0
+        loggedRestoreWakeGiveUp = false
+    }
+
+    // MARK: 断开后唤醒以拆镜像（审计 A-4）
+
+    private var restoreWakeRequests = 0
+    private var loggedRestoreWakeGiveUp = false
+    private static let restoreWakeLimit = 3
+
+    /// 观看端一走，screensharingd 的 UserIsActive 断言随之消失，显示器约 6 秒后休眠
+    /// （2026-10-22 实测：02:24:55 断开，02:25:01 休眠）。断开确认还要等守护进程约 15 秒
+    /// 滞留、两轮轮询和锁屏确认，所以拆镜像时显示器几乎必然在睡，原来只能推迟到本地
+    /// 有人唤醒。这里在**会话已锁定**时声明一次用户活动把显示器叫醒，下一轮空闲轮询
+    ///（3 秒）即可拆回扩展；之后显示器在锁屏画面上按系统计时器自行再睡。
+    /// 未确认锁定绝不唤醒：那等于把未锁的桌面亮给房间里的人（锁屏超时后照样撤黑的
+    /// 那条兜底路径正属于这种情况）。每份快照最多唤醒 restoreWakeLimit 次，快照清除
+    /// 或新会话时归零，失败不会把显示器一直吊着
+    private func requestWakeForMirrorRestore() {
+        guard Self.isScreenLocked() else { return }
+        guard restoreWakeRequests < Self.restoreWakeLimit else {
+            if !loggedRestoreWakeGiveUp {
+                loggedRestoreWakeGiveUp = true
+                ErrorLog.log("镜像: 已唤醒 \(Self.restoreWakeLimit) 次仍未能拆镜像，改为等待本地唤醒")
+            }
+            return
+        }
+        restoreWakeRequests += 1
+        let r = IOPMAssertionDeclareUserActivity("Bento display restore" as CFString,
+                                                 kIOPMUserActiveLocal, &mirrorWakeAssertion)
+        if r != kIOReturnSuccess {
+            ErrorLog.log("镜像: 声明用户活动以唤醒显示器失败 IOReturn=\(r)")
+        } else if restoreWakeRequests == 1 {
+            ErrorLog.log("镜像: 显示器休眠中且屏幕已锁定，已请求唤醒以拆回扩展显示")
+        }
     }
 
     // MARK: 崩溃/被杀后的收尾

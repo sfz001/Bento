@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import IOKit.pwr_mgt
 
 // Compile with ScreenController.swift only. These module-local substitutes keep
 // tests from changing real displays, launching processes, or writing Bento logs.
@@ -14,6 +15,8 @@ private enum Displays {
     static var configured: [CGDirectDisplayID] = []
     static var lastTarget = kCGNullDirectDisplay
     static var commits = 0
+    static var locked = false
+    static var wakeRequests = 0
     static let snapshotKey = "BentoMirrorSnapshot"
 
     static func reset(preMirrored: Bool = false) {
@@ -26,6 +29,8 @@ private enum Displays {
         configured = []
         lastTarget = kCGNullDirectDisplay
         commits = 0
+        locked = false
+        wakeRequests = 0
         let snapshot = "{\"entries\":[{\"displayID\":2,\"mirrorsDisplayID\":0}],\"preMirrored\":\(preMirrored ? "[2]" : "[]")}"
         UserDefaults.standard.set(Data(snapshot.utf8), forKey: snapshotKey)
     }
@@ -64,6 +69,15 @@ func CGCompleteDisplayConfiguration(_ config: CGDisplayConfigRef?, _ option: CGC
         Displays.mirrored = Displays.lastTarget != kCGNullDirectDisplay
     }
     return Displays.completeError
+}
+// 锁屏查询与唤醒同样替换掉：测试绝不能点亮真实显示器
+func CGSessionCopyCurrentDictionary() -> CFDictionary? {
+    (Displays.locked ? ["CGSSessionScreenIsLocked": true] : [:]) as NSDictionary as CFDictionary
+}
+func IOPMAssertionDeclareUserActivity(_ AssertionName: CFString!, _ userType: IOPMUserActiveType,
+                                      _ AssertionID: UnsafeMutablePointer<IOPMAssertionID>!) -> IOReturn {
+    Displays.wakeRequests += 1
+    return kIOReturnSuccess
 }
 enum ErrorLog { static func log(_ message: String) {} }
 enum DisplayKeys { static func uuid(for display: CGDirectDisplayID) -> String { "test-\(display)" } }
@@ -153,6 +167,34 @@ struct MirrorRestoreTests {
         precondition(enableAsleep.hasPendingMirrorRestore, "Snapshot must exist once mirroring is applied")
         precondition(enableAsleep.enableMirroring() && Displays.commits == 1,
                      "Already mirrored must not commit again")
+
+        // A-4：恢复时显示器休眠——未锁定绝不唤醒；已锁定才唤醒，每份快照最多 3 次
+        Displays.reset()
+        Displays.asleep = true
+        let unlockedRestore = ScreenController()
+        unlockedRestore.disableMirroring()
+        precondition(Displays.wakeRequests == 0 && unlockedRestore.hasPendingMirrorRestore,
+                     "Must never wake displays while the session is unlocked")
+
+        Displays.reset()
+        Displays.asleep = true
+        Displays.locked = true
+        let lockedRestore = ScreenController()
+        for _ in 0..<5 { lockedRestore.disableMirroring() }
+        precondition(Displays.wakeRequests == 3 && Displays.configured.isEmpty,
+                     "Wake requests are capped and asleep displays are never configured")
+        precondition(lockedRestore.hasPendingMirrorRestore)
+        Displays.asleep = false
+        lockedRestore.disableMirroring()
+        precondition(!Displays.mirrored && !lockedRestore.hasPendingMirrorRestore)
+        Displays.reset()
+        Displays.asleep = true
+        Displays.locked = true
+        lockedRestore.disableMirroring()
+        precondition(Displays.wakeRequests == 1, "A cleared snapshot resets the wake budget")
+        lockedRestore.resetMirrorRetries()
+        for _ in 0..<3 { lockedRestore.disableMirroring() }
+        precondition(Displays.wakeRequests == 4, "A new session resets the wake budget")
 
         let order = RestoreOrderSpy()
         order.restoreDisplaySettings()
