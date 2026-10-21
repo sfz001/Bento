@@ -17,11 +17,18 @@ struct RemoteProcessIdentity: Equatable {
     static func read(_ pid: Int32) -> RemoteProcessIdentity? {
         var path = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
         guard proc_pidpath(pid, &path, UInt32(path.count)) > 0 else { return nil }
-        var info = proc_bsdinfo()
-        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
-        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+        // 启动时间走 sysctl KERN_PROC_PID（ps -o lstart 同源）。不能用
+        // proc_pidinfo(PROC_PIDTBSDINFO)：普通用户进程对 root 守护进程调用返回 EPERM
+        // （screensharingd、launchd 均如此，2026-10-22 实测），身份读取为 nil 后探测每轮
+        // unknown，屏幕共享会话从未被认定为已连接。proc_pidpath 对同一进程是可用的。
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.size
+        guard sysctl(&mib, UInt32(mib.count), &info, &size, nil, 0) == 0,
+              size == MemoryLayout<kinfo_proc>.size, info.kp_proc.p_pid == pid else { return nil }
+        let start = info.kp_proc.p_starttime
         return RemoteProcessIdentity(pid: pid, executable: String(cString: path),
-            startedAt: Date(timeIntervalSince1970: Double(info.pbi_start_tvsec) + Double(info.pbi_start_tvusec) / 1_000_000))
+            startedAt: Date(timeIntervalSince1970: Double(start.tv_sec) + Double(start.tv_usec) / 1_000_000))
     }
 }
 
