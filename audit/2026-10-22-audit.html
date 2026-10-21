@@ -1,0 +1,429 @@
+<meta charset="utf-8">
+<title>Bento 远程会话现场审计</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  /* 布局：左侧粘性目录 + 右侧单栏正文；沿用 2026-09-08 审计的配色与字体体系 */
+  :root {
+    --bg: #F4F6F8; --surface: #FFFFFF; --surface-2: #EDF0F3;
+    --ink: #171C24; --muted: #5A6472; --hair: #D9DEE5;
+    --accent: #1E6B74; --accent-soft: #E3F0F1;
+    --sev-critical: #9F1D1D; --sev-critical-bg: #FBE9E9;
+    --sev-high: #B4530A;     --sev-high-bg: #FCEEDF;
+    --sev-medium: #8A6A00;   --sev-medium-bg: #FAF2D6;
+    --sev-low: #4B5563;      --sev-low-bg: #E9ECF0;
+    --sev-info: #5A6472;     --sev-info-bg: #E9ECF0;
+    --done: #2F6B3A;         --done-bg: #E5F2E7;
+    --open: #8A5A00;         --open-bg: #FAF0DC;
+    --code-bg: #F0F2F5; --shadow: 0 1px 2px rgba(23, 28, 36, .06);
+    --font-body: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0F1216; --surface: #171B21; --surface-2: #1F252D;
+      --ink: #E7EAEE; --muted: #98A2B0; --hair: #2A313A;
+      --accent: #6CC0C8; --accent-soft: #14333A;
+      --sev-critical: #F08A8A; --sev-critical-bg: #3A1A1A;
+      --sev-high: #F0A868;     --sev-high-bg: #3A2614;
+      --sev-medium: #E3C862;   --sev-medium-bg: #332D12;
+      --sev-low: #A9B2C0;      --sev-low-bg: #242A32;
+      --sev-info: #A9B2C0;     --sev-info-bg: #242A32;
+      --done: #8BCB97;         --done-bg: #16301B;
+      --open: #E3C862;         --open-bg: #332D12;
+      --code-bg: #12161B; --shadow: none; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0F1216; --surface: #171B21; --surface-2: #1F252D;
+    --ink: #E7EAEE; --muted: #98A2B0; --hair: #2A313A;
+    --accent: #6CC0C8; --accent-soft: #14333A;
+    --sev-critical: #F08A8A; --sev-critical-bg: #3A1A1A;
+    --sev-high: #F0A868;     --sev-high-bg: #3A2614;
+    --sev-medium: #E3C862;   --sev-medium-bg: #332D12;
+    --sev-low: #A9B2C0;      --sev-low-bg: #242A32;
+    --sev-info: #A9B2C0;     --sev-info-bg: #242A32;
+    --done: #8BCB97;         --done-bg: #16301B;
+    --open: #E3C862;         --open-bg: #332D12;
+    --code-bg: #12161B; --shadow: none; color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.7; -webkit-font-smoothing: antialiased; }
+  code, pre, .mono { font-family: var(--font-mono); }
+  code { font-size: .88em; background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+  pre { margin: 0; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover, a:focus-visible { text-decoration: underline; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  h1, h2, h3 { text-wrap: balance; margin: 0; font-weight: 600; letter-spacing: -.01em; }
+  h1 { font-size: 32px; line-height: 1.2; }
+  h2 { font-size: 21px; line-height: 1.3; padding-top: 8px; }
+  h3 { font-size: 16.5px; line-height: 1.35; }
+  p { margin: 0; }
+  ul, ol { margin: 0; padding-left: 1.3em; }
+  li + li { margin-top: 4px; }
+  .eyebrow { font-family: var(--font-mono); font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .page { max-width: 1180px; margin: 0 auto; padding-block: 40px 80px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; grid-template-columns: 216px minmax(0, 1fr); gap: 48px; }
+  @media (max-width: 1000px) { .page { grid-template-columns: minmax(0, 1fr); gap: 28px; } .toc { position: static !important; } }
+  .toc { position: sticky; top: 24px; align-self: start; display: flex; flex-direction: column; gap: 6px; font-size: 13.5px; }
+  .toc .eyebrow { margin-bottom: 6px; }
+  .toc a { color: var(--muted); padding: 3px 0 3px 10px; border-left: 2px solid transparent; }
+  .toc a:hover { color: var(--ink); border-left-color: var(--hair); text-decoration: none; }
+  main { display: flex; flex-direction: column; gap: 44px; min-width: 0; }
+  .prose { max-width: 76ch; display: flex; flex-direction: column; gap: 12px; }
+  section { display: flex; flex-direction: column; gap: 16px; scroll-margin-top: 20px; }
+  header.hero { display: flex; flex-direction: column; gap: 14px; padding-bottom: 28px; border-bottom: 1px solid var(--hair); }
+  .meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px 28px; font-size: 13.5px; color: var(--muted); }
+  .meta b { color: var(--ink); font-weight: 500; }
+  .score { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
+  .score .tile { background: var(--surface); border: 1px solid var(--hair); border-radius: 6px; padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; box-shadow: var(--shadow); }
+  .score .n { font-size: 27px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .score .l { font-size: 12.5px; color: var(--muted); }
+  .score .tile[data-k="critical"] .n { color: var(--sev-critical); }
+  .score .tile[data-k="high"] .n { color: var(--sev-high); }
+  .score .tile[data-k="medium"] .n { color: var(--sev-medium); }
+  .score .tile[data-k="low"] .n { color: var(--sev-low); }
+  .score .tile[data-k="done"] .n { color: var(--done); }
+  .score .tile[data-k="open"] .n { color: var(--open); }
+  @media (max-width: 760px) { .score { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  .chip { display: inline-flex; align-items: center; font-family: var(--font-mono); font-size: 11px; letter-spacing: .06em; padding: 2px 8px; border-radius: 3px; font-weight: 500; white-space: nowrap; }
+  .chip[data-sev="critical"] { color: var(--sev-critical); background: var(--sev-critical-bg); }
+  .chip[data-sev="high"] { color: var(--sev-high); background: var(--sev-high-bg); }
+  .chip[data-sev="medium"] { color: var(--sev-medium); background: var(--sev-medium-bg); }
+  .chip[data-sev="low"] { color: var(--sev-low); background: var(--sev-low-bg); }
+  .chip[data-sev="info"] { color: var(--sev-info); background: var(--sev-info-bg); }
+  .chip[data-st="done"] { color: var(--done); background: var(--done-bg); }
+  .chip[data-st="open"] { color: var(--open); background: var(--open-bg); }
+  .chip[data-st="ok"] { color: var(--done); background: var(--done-bg); }
+  .chip[data-st="warn"] { color: var(--open); background: var(--open-bg); }
+  .callout { border: 1px solid var(--hair); border-left: 3px solid var(--sev-high); background: var(--surface); border-radius: 6px; padding: 16px 20px; display: flex; flex-direction: column; gap: 8px; max-width: 86ch; }
+  .callout.note { border-left-color: var(--accent); }
+  .callout .eyebrow { color: var(--sev-high); }
+  .callout.note .eyebrow { color: var(--accent); }
+  .timeline { display: grid; grid-template-columns: 88px 14px minmax(0, 1fr); gap: 0 12px; font-size: 14px; }
+  .timeline .t { font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); padding: 6px 0; text-align: right; font-variant-numeric: tabular-nums; }
+  .timeline .rail { position: relative; }
+  .timeline .rail::before { content: ""; position: absolute; left: 6px; top: 0; bottom: 0; width: 1px; background: var(--hair); }
+  .timeline .row:first-child .rail::before { top: 14px; }
+  .timeline .row:last-child .rail::before { bottom: calc(100% - 14px); }
+  .timeline .dot { position: absolute; left: 2px; top: 12px; width: 9px; height: 9px; border-radius: 50%; background: var(--muted); border: 2px solid var(--bg); box-sizing: content-box; }
+  .timeline .e { padding: 6px 0 10px; }
+  .timeline .row { display: contents; }
+  .timeline .row[data-kind="bento"] .dot { background: var(--accent); }
+  .timeline .row[data-kind="fail"] .dot { background: var(--sev-critical); }
+  .timeline .row[data-kind="fail"] .e { color: var(--sev-critical); font-weight: 500; }
+  .timeline .row[data-kind="ok"] .dot { background: var(--done); }
+  .timeline .who { font-family: var(--font-mono); font-size: 11px; color: var(--muted); letter-spacing: .04em; }
+  .finding { border-left: 3px solid var(--sev-low); padding: 4px 0 4px 20px; display: flex; flex-direction: column; gap: 10px; scroll-margin-top: 20px; }
+  .finding[data-sev="high"] { border-left-color: var(--sev-high); }
+  .finding[data-sev="medium"] { border-left-color: var(--sev-medium); }
+  .finding[data-status="done"] { border-left-color: var(--done); }
+  .finding + .finding { margin-top: 22px; }
+  .finding .head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; }
+  .finding .id { font-family: var(--font-mono); font-size: 13px; color: var(--muted); font-weight: 500; }
+  .kv { display: grid; grid-template-columns: 5.5em minmax(0, 1fr); gap: 6px 14px; max-width: 80ch; }
+  .kv .k { font-family: var(--font-mono); font-size: 12px; letter-spacing: .04em; color: var(--muted); padding-top: 4px; }
+  .kv .v { min-width: 0; }
+  .loc { font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); }
+  pre.evidence { background: var(--code-bg); border: 1px solid var(--hair); border-radius: 5px; padding: 12px 14px; font-size: 12.5px; line-height: 1.55; overflow-x: auto; white-space: pre; color: var(--ink); }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--hair); border-radius: 6px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; vertical-align: top; padding: 9px 14px; border-bottom: 1px solid var(--hair); }
+  th { font-weight: 500; color: var(--muted); font-size: 12.5px; letter-spacing: .03em; background: var(--surface-2); white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  td.nw { white-space: nowrap; }
+  .ok-list li::marker { color: var(--done); content: "✓ "; }
+  .steps { padding-left: 1.5em; display: flex; flex-direction: column; gap: 8px; max-width: 80ch; }
+  .steps li::marker { font-family: var(--font-mono); color: var(--accent); font-weight: 500; }
+  footer { color: var(--muted); font-size: 13px; padding-top: 24px; border-top: 1px solid var(--hair); }
+  @media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+</style>
+
+<div class="page">
+  <nav class="toc" aria-label="目录">
+    <div class="eyebrow">目录</div>
+    <a href="#summary">结论</a>
+    <a href="#state">本机状态快照</a>
+    <a href="#timeline">今天的会话时间线</a>
+    <a href="#findings">发现 · 11 项</a>
+    <a href="#forecast">断开后的预期</a>
+    <a href="#sound">判定稳妥的部分</a>
+    <a href="#evidence">附录：证据</a>
+  </nav>
+
+  <main>
+    <header class="hero">
+      <div class="eyebrow">审计报告 · Bento · 2026-10-22 · 远程会话进行中</div>
+      <h1>Bento 远程会话现场审计</h1>
+      <p style="max-width:72ch;color:var(--muted)">在一次真实的 macOS 屏幕共享会话进行期间，对本机运行时状态的只读审计：远程会话、显示器、gamma、Dock、Bento 进程、快照、权限、日志与电源。取证时间 02:30 到 02:34（本机时区 CST）。不改任何源码。</p>
+      <div class="meta">
+        <div>代码基线 <b>a22f27d</b>（领先 origin/main 2 个提交，未推送）</div>
+        <div>运行实例 <b>pid 56886 · 02:20:51 启动</b></div>
+        <div>系统 <b>macOS 27.2 (26B5112a)</b></div>
+        <div>硬件 <b>M4 Pro · 两块 Studio Display · 无内置屏</b></div>
+        <div>远程来源 <b>macOS 屏幕共享 · screensharingd pid 51664</b></div>
+        <div>方法 <b>统一日志 + error.log + CoreGraphics 直读 + defaults + 进程表</b></div>
+      </div>
+    </header>
+
+    <section id="summary">
+      <h2>结论</h2>
+      <div class="prose">
+        <p><b>此刻本机处于正确的隐私状态：两块显示器 gamma 全黑、已合并为硬件镜像、Dock 在左侧、探测健康。</b>这是本机自 2026-09-08 之后第一次完整走通「检测 → 熄屏 → 镜像 → Dock」的连接链路。</p>
+        <p>今天解决了两个问题。第一个是根因：R-7（09-08 15:30）引入的进程身份校验用 <code>proc_pidinfo</code> 读 root 守护进程，普通用户进程拿到 EPERM，屏幕共享探测自那天起每轮都是 unknown，六周内没有任何会话被认定为已连接。第二个是显示器休眠：远程用户五分钟不操作，显示器就进入休眠，休眠中 CoreGraphics 拒绝镜像配置，而显示器醒来不会触发任何重试入口。两项都已修复、提交并在当前会话中实测生效。</p>
+        <p>剩下四项待处理，没有一项影响当前会话的隐私，但有两项会影响断开后的体验：断开时显示器大概率已经休眠，镜像要等你回到机器前唤醒显示器后才会拆回扩展；以及一次镜像重配置在休眠显示器上可能让 Bento 在一分钟里刷出七十万行系统日志并被系统限流。</p>
+      </div>
+      <div class="score" aria-label="发现统计">
+        <div class="tile" data-k="critical"><div class="n">0</div><div class="l">严重</div></div>
+        <div class="tile" data-k="high"><div class="n">2</div><div class="l">高 · 今日已修</div></div>
+        <div class="tile" data-k="medium"><div class="n">2</div><div class="l">中</div></div>
+        <div class="tile" data-k="low"><div class="n">7</div><div class="l">低 / 提示</div></div>
+        <div class="tile" data-k="done"><div class="n">2</div><div class="l">已修复并实测</div></div>
+        <div class="tile" data-k="open"><div class="n">4</div><div class="l">待处理</div></div>
+      </div>
+      <div class="callout note">
+        <div class="eyebrow">一个事实更正</div>
+        <p>今天早些时候的分析、CLAUDE.md 新增段落和 R-9 提交说明都写了「远程输入不算本地活动」。取证推翻了这句话：<code>screensharingd</code> 在远程输入时持有名为 <code>Remote user active</code> 的 UserIsActive 断言，观看端认证成功时显示器立即唤醒（01:57:01、02:25:09 两次都是）。准确的说法是：<b>远程用户连续五分钟不操作，显示器才休眠</b>。会话开始时显示器通常是醒的，今天 02:10 那次镜像失败是因为 Bento 在远程用户空闲期间重启。见 <a href="#A-5">A-5</a>。</p>
+      </div>
+    </section>
+
+    <section id="state">
+      <h2>本机状态快照</h2>
+      <p class="prose" style="color:var(--muted)">02:30 到 02:34 取证。每一行都来自直接读取，不是推断。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>项目</th><th>状态</th><th>读到的值</th></tr></thead>
+          <tbody>
+            <tr><td class="nw">远程会话</td><td class="nw"><span class="chip" data-st="ok">连接中</span></td><td><code>screensharingd</code> pid 51664，root，01:57:00 启动；<code>ScreensharingAgent</code> pid 51665。最近一次认证成功 02:25:09（RSA-SRP，同一用户、同一观看端地址）。系统睡眠被 screensharingd 的 <code>Remote user is connected</code> 断言阻止。</td></tr>
+            <tr><td class="nw">Bento 探测</td><td class="nw"><span class="chip" data-st="ok">健康</span></td><td>02:20:51 重启后 error.log 无任何「探测异常」记录；两秒内进入会话（镜像成功日志 02:20:53）。生产探测代码对 pid 51664 单独执行返回 <code>connected("Screen Sharing")</code>，耗时 1.0 秒。</td></tr>
+            <tr><td class="nw">gamma</td><td class="nw"><span class="chip" data-st="ok">全黑</span></td><td><code>CGGetDisplayTransferByFormula</code>：显示器 3 与 2 的 RGB max 均为 0.00。</td></tr>
+            <tr><td class="nw">镜像</td><td class="nw"><span class="chip" data-st="ok">已合并</span></td><td><code>CGDisplayIsInMirrorSet</code> 两块均为 1；system_profiler：主屏 Master Mirror，副屏 Hardware Mirror。快照 <code>{"preMirrored":[],"entries":[{"displayID":2,"mirrorsDisplayID":0}]}</code>，断开时据此拆镜像。</td></tr>
+            <tr><td class="nw">显示器电源</td><td class="nw"><span class="chip" data-st="ok">清醒</span></td><td>两块 asleep=0（02:25:09 随观看端认证唤醒）。<code>displaysleep 5</code>：远程空闲五分钟后会再次休眠。</td></tr>
+            <tr><td class="nw">分辨率</td><td class="nw"><span class="chip" data-st="ok">未改动</span></td><td>两块 1704×959 点（5120×2880 像素）。无内置屏，<code>switchResolution</code> 按 3db76ad 的闸门跳过；<code>BentoDisplayModeSnapshot</code> 为空，符合预期。</td></tr>
+            <tr><td class="nw">Dock</td><td class="nw"><span class="chip" data-st="ok">会话态</span></td><td>当前 orientation=left、autohide=0。快照 <code>{"orientation":"bottom","autohide":true}</code>，断开时恢复为底部自动隐藏。</td></tr>
+            <tr><td class="nw">锁屏</td><td class="nw"><span class="chip" data-st="ok">未锁（预期）</span></td><td>会话字典无 <code>CGSSessionScreenIsLocked</code>；<code>sysadminctl -screenLock status</code> = immediate，屏保一启动即上锁，断开链路的锁定确认应能快速通过。<code>/System/Library/CoreServices/ScreenSaverEngine.app</code> 存在。</td></tr>
+            <tr><td class="nw">Bento 进程</td><td class="nw"><span class="chip" data-st="ok">空闲</span></td><td>pid 56886，CPU 0.0%，RSS 80 MB，7 线程，无子进程。构建时间 02:20:50，晚于最后一次源码修改 02:20:20，二进制与 a22f27d 代码一致，但 Info.plist 的 <code>BentoBuildCommit</code> 标为 <code>22aef06-dirty</code>（见 A-6）。</td></tr>
+            <tr><td class="nw">事件 tap</td><td class="nw"><span class="chip" data-st="ok">2 个已启用</span></td><td><code>CGGetEventTapList</code>：pid 56886 两个 tap 均 enabled，mask 0x46（左键按下/抬起/拖动 = 分屏）与 0x20400000（滚轮 + 手势 = 滚动方向）。两者都是 options=0 的主动过滤 tap，能存在即证明辅助功能与输入监控权限有效。</td></tr>
+            <tr><td class="nw">权限数据库</td><td class="nw"><span class="chip" data-st="warn">不可直读</span></td><td>TCC.db 对 shell 不可读（无完全磁盘访问），只能靠上一行间接证明。</td></tr>
+            <tr><td class="nw">开机自启</td><td class="nw"><span class="chip" data-st="ok">SMAppService</span></td><td><code>launchctl print gui/501</code> 列出 <code>application.com.sz.bento.*</code>；<code>~/Library/LaunchAgents</code> 无旧 plist；<code>LaunchAtLoginConfigured=1</code>。</td></tr>
+            <tr><td class="nw">日志文件</td><td class="nw"><span class="chip" data-st="ok">170 KB</span></td><td>error.log 169,738 字节，低于 256 KB 滚动阈值；无任何致命信号标记。磁盘剩余 332 GB。</td></tr>
+            <tr><td class="nw">统一日志</td><td class="nw"><span class="chip" data-st="warn">曾被限流</span></td><td>02:10 那一分钟 Bento（旧实例 pid 55142）写了 708,650 行，02:10:20 被系统 QUARANTINED。当前实例 02:20 写 213 行，之后每分钟个位数。见 A-3。</td></tr>
+            <tr><td class="nw">其它模块</td><td class="nw"><span class="chip" data-st="ok">默认</span></td><td>滚动：鼠标反转开、触控板关。分屏：仅副屏（UUID 8B0B…）有左右二分布局。菜单栏图标管理停用，<code>HiddenMenuBarItemKeys</code> 仍存 4 个键（无害）。防睡：无 Bento 断言。</td></tr>
+            <tr><td class="nw">系统</td><td class="nw"><span class="chip" data-st="ok">—</span></td><td>macOS 27.2 (26B5112a)，10-15 19:50 开机，接电源。系统睡眠 0（被 sharingd/ChatGPT/powerd/Claude/screensharingd 阻止）。</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="timeline">
+      <h2>今天的会话时间线</h2>
+      <p class="prose" style="color:var(--muted)">时间为本机时区。来源：WindowServer 的 Display:Power 广播、screensharingd 日志、Bento 的 SkyLight 提交记录、error.log。</p>
+      <div class="timeline">
+        <div class="row"><div class="t">01:57:00.7</div><div class="rail"><span class="dot"></span></div><div class="e">观看端连入，<code>screensharingd</code> 启动 <span class="who">系统</span></div></div>
+        <div class="row"><div class="t">01:57:01.9</div><div class="rail"><span class="dot"></span></div><div class="e">显示器从休眠唤醒（由远程连接触发） <span class="who">WindowServer</span></div></div>
+        <div class="row"><div class="t">01:57:02.3</div><div class="rail"><span class="dot"></span></div><div class="e">认证成功 <span class="who">screensharingd</span></div></div>
+        <div class="row" data-kind="fail"><div class="t">01:57:29</div><div class="rail"><span class="dot"></span></div><div class="e">旧实例（pid 1627，09-08 构建）记录「屏幕共享探测连续 10 轮异常」：从守护进程出现的第一轮起每轮 unknown <span class="who">Bento</span></div></div>
+        <div class="row"><div class="t">02:09:07.9</div><div class="rail"><span class="dot"></span></div><div class="e">远程用户空闲五分钟，显示器休眠 <span class="who">WindowServer</span></div></div>
+        <div class="row" data-kind="bento"><div class="t">02:10:00.1</div><div class="rail"><span class="dot"></span></div><div class="e">第一次重启（R-8 探测修复）。一秒内认定连接：gamma 压黑、Dock 移左 <span class="who">Bento</span></div></div>
+        <div class="row" data-kind="fail"><div class="t">02:10:01 / 02:10:11</div><div class="rail"><span class="dot"></span></div><div class="e">两次提交镜像配置都失败（显示器休眠，错误 1014），镜像快照被清；失败只走 NSLog，error.log 无记录 <span class="who">Bento</span></div></div>
+        <div class="row" data-kind="fail"><div class="t">02:10:20.7</div><div class="rail"><span class="dot"></span></div><div class="e">SkyLight 在 Bento 进程内刷出 708,650 行「Waiting for previous reconfig to complete」，进程被系统日志限流 <span class="who">libsystem_trace</span></div></div>
+        <div class="row"><div class="t">02:13:29</div><div class="rail"><span class="dot"></span></div><div class="e">审计者用 <code>caffeinate -u -t 3</code> 唤醒显示器 13 秒做验证：没有任何重新镜像的尝试 <span class="who">实验</span></div></div>
+        <div class="row"><div class="t">02:16:17.8</div><div class="rail"><span class="dot"></span></div><div class="e">显示器唤醒（远程输入） <span class="who">WindowServer</span></div></div>
+        <div class="row" data-kind="bento"><div class="t">02:20:51</div><div class="rail"><span class="dot"></span></div><div class="e">第二次重启（R-9 补镜像）。显示器此时醒着 <span class="who">Bento</span></div></div>
+        <div class="row" data-kind="ok"><div class="t">02:20:52.6</div><div class="rail"><span class="dot"></span></div><div class="e">镜像配置提交，02:20:53 error.log「已把 1 块显示器合并到主屏」。远程画面变为一块屏 <span class="who">Bento</span></div></div>
+        <div class="row"><div class="t">02:24:55.9</div><div class="rail"><span class="dot"></span></div><div class="e">观看端断开（Remove viewer）；守护进程保留 <span class="who">screensharingd</span></div></div>
+        <div class="row"><div class="t">02:25:01.1</div><div class="rail"><span class="dot"></span></div><div class="e">观看端离开六秒后显示器休眠 <span class="who">WindowServer</span></div></div>
+        <div class="row" data-kind="ok"><div class="t">02:25:09.3</div><div class="rail"><span class="dot"></span></div><div class="e">观看端重新认证，显示器唤醒。守护进程 pid 未变，Bento 的认证缓存命中，会话连续、黑屏从未撤下 <span class="who">screensharingd / Bento</span></div></div>
+      </div>
+    </section>
+
+    <section id="findings">
+      <h2>发现 · 11 项</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>编号</th><th>严重度</th><th>状态</th><th>问题</th></tr></thead>
+          <tbody>
+            <tr><td class="nw"><a href="#A-1">A-1</a></td><td class="nw"><span class="chip" data-sev="high">高</span></td><td class="nw"><span class="chip" data-st="done">已修复 33cd0e1</span></td><td>屏幕共享探测自 R-7 起永久 unknown：proc_pidinfo 对 root 守护进程返回 EPERM</td></tr>
+            <tr><td class="nw"><a href="#A-2">A-2</a></td><td class="nw"><span class="chip" data-sev="high">高</span></td><td class="nw"><span class="chip" data-st="done">已修复 a22f27d</span></td><td>显示器休眠时镜像失败且永不重试</td></tr>
+            <tr><td class="nw"><a href="#A-3">A-3</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td>镜像重配置在休眠显示器上可触发 SkyLight 自旋，一分钟 70 万行日志并被限流</td></tr>
+            <tr><td class="nw"><a href="#A-4">A-4</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td>断开时显示器大概率已休眠，拆镜像要等本地唤醒</td></tr>
+            <tr><td class="nw"><a href="#A-5">A-5</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td>CLAUDE.md 与 R-9 提交说明中「远程输入不算活动」与事实不符</td></tr>
+            <tr><td class="nw"><a href="#A-6">A-6</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td>两个提交未推送；运行中的二进制构建标签为 22aef06-dirty</td></tr>
+            <tr><td class="nw"><a href="#A-7">A-7</a></td><td class="nw"><span class="chip" data-sev="info">提示</span></td><td class="nw">—</td><td>系统已是 macOS 27.2 (26B5112a)，文档与记忆仍写 27.0</td></tr>
+            <tr><td class="nw"><a href="#A-8">A-8</a></td><td class="nw"><span class="chip" data-sev="info">提示</span></td><td class="nw">—</td><td>10-15 到今天运行的是 09-08 构建；期间一次 pgrep 3 秒超时为开机瞬时负载</td></tr>
+            <tr><td class="nw"><a href="#A-9">A-9</a></td><td class="nw"><span class="chip" data-sev="info">提示</span></td><td class="nw">—</td><td>观看端 14 秒内断开重连，Bento 会话连续，行为正确</td></tr>
+            <tr><td class="nw"><a href="#A-10">A-10</a></td><td class="nw"><span class="chip" data-sev="info">提示</span></td><td class="nw">—</td><td>权限只能间接证明：TCC 数据库对 shell 不可读</td></tr>
+            <tr><td class="nw"><a href="#A-11">A-11</a></td><td class="nw"><span class="chip" data-sev="info">提示</span></td><td class="nw">—</td><td>R-9 的「休眠先唤醒」分支尚未在真实会话里触发过</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <article class="finding" id="A-1" data-sev="high" data-status="done">
+        <div class="head"><span class="id">A-1</span><h3>屏幕共享探测自 R-7 起永久 unknown</h3><span class="chip" data-sev="high">高</span><span class="chip" data-st="done">已修复 33cd0e1</span></div>
+        <div class="kv">
+          <div class="k">位置</div><div class="v loc">Sources/RemoteConnectionProbe.swift · RemoteProcessIdentity.read</div>
+          <div class="k">事实</div><div class="v"><code>proc_pidinfo(PROC_PIDTBSDINFO)</code> 由普通用户进程对 screensharingd（root）调用返回 0、errno 1；对 launchd 同样 EPERM；对自身进程正常。身份读取为 nil 后，<code>screenSharing()</code> 每轮返回 unknown，守护进程出现 29 秒后触发「探测连续 10 轮异常」。R-7 在 09-08 15:30 提交，当天的真实会话在 14:53，之后再无会话，回归测试注入假的 identity，所以六周无人发现。</div>
+          <div class="k">修复</div><div class="v">改用 <code>sysctl KERN_PROC_PID</code> 读 <code>kinfo_proc.p_starttime</code>（与 <code>ps -o lstart</code> 同源），对 root 进程可读；<code>proc_pidpath</code> 保持不变。生产探测对 pid 51664 单独执行返回已连接；02:20:51 重启后一秒内进入会话。</div>
+        </div>
+      </article>
+
+      <article class="finding" id="A-2" data-sev="high" data-status="done">
+        <div class="head"><span class="id">A-2</span><h3>显示器休眠时镜像失败且永不重试</h3><span class="chip" data-sev="high">高</span><span class="chip" data-st="done">已修复 a22f27d</span></div>
+        <div class="kv">
+          <div class="k">位置</div><div class="v loc">Sources/ScreenController.swift · enableMirroring / ensureMirroringWhileConnected；Sources/AppDelegate.swift · applyConnected</div>
+          <div class="k">事实</div><div class="v">02:10:00 与 02:10:11 两次 <code>CGCompleteDisplayConfiguration</code> 在休眠显示器上失败，<code>enableMirroring</code> 清掉刚保存的快照后无人重试。02:13:29 用 <code>caffeinate -u</code> 唤醒显示器 13 秒，Bento 没有发出任何镜像配置：显示器从空闲休眠醒来不触发 <code>didChangeScreenParameters</code>，而那是当时唯一的重镜像入口。失败路径只有 NSLog，在 <code>log show</code> 里是 <code>&lt;private&gt;</code>，error.log 一字未留。</div>
+          <div class="k">修复</div><div class="v">会话已准备且 gamma 已黑时每轮轮询调用 <code>ensureMirroringWhileConnected</code>：有非主屏在镜像组外就用 <code>IOPMAssertionDeclareUserActivity</code> 唤醒并维持显示器清醒，0.6 秒后补压 gamma，醒后调 <code>enableMirroring</code>，间隔不少于 10 秒，清醒状态下连续 3 次失败即停。<code>enableMirroring</code> 返回结果，开始/配置/提交失败与成功均写 error.log。实测：02:20:52 提交，02:20:53 成功记录，system_profiler 显示硬件镜像。</div>
+        </div>
+      </article>
+
+      <article class="finding" id="A-3" data-sev="medium" data-status="open">
+        <div class="head"><span class="id">A-3</span><h3>镜像重配置在休眠显示器上可触发 SkyLight 自旋与日志限流</h3><span class="chip" data-sev="medium">中</span><span class="chip" data-st="open">待处理</span></div>
+        <div class="kv">
+          <div class="k">位置</div><div class="v loc">Sources/AppDelegate.swift · reassertScreenOffState；Sources/ScreenController.swift · enableMirroring</div>
+          <div class="k">事实</div><div class="v">02:10 那一分钟旧实例写了 708,650 行统一日志，全部是 SkyLight 的「Waiting for previous reconfig to complete」，02:10:20 进程被 <code>libsystem_trace</code> 标记 QUARANTINED DUE TO HIGH LOGGING VOLUME。时序：02:10:00.98 第一次镜像提交在休眠显示器上挂起，02:10:11.6 <code>didChangeScreenParameters</code> 触发的 <code>reassertScreenOffState</code> 又调了一次 <code>enableMirroring</code>，SkyLight 在进程内忙等前一次重配置完成并持续打日志。</div>
+          <div class="k">影响</div><div class="v">限流后该进程后续的 os_log 全部丢失（包括 NSLog 诊断），CPU 在忙等期间被占用。R-9 把轮询路径的重试拉开到 10 秒，但 <code>reassertScreenOffState</code> 仍可在前一次重配置未完成时再次进入。当前实例未再出现（02:20 后每分钟个位数行）。</div>
+          <div class="k">建议</div><div class="v">在 <code>ScreenController</code> 记录「上次提交显示配置的时刻」，距上次提交不足 N 秒（或 <code>CGDisplayIsAsleep</code> 为真）时让 <code>reassertScreenOffState</code> 只重压 gamma、不再提交镜像；镜像交给轮询路径的 <code>ensureMirroringWhileConnected</code> 统一处理。</div>
+        </div>
+      </article>
+
+      <article class="finding" id="A-4" data-sev="medium" data-status="open">
+        <div class="head"><span class="id">A-4</span><h3>断开时显示器大概率已休眠，拆镜像要等本地唤醒</h3><span class="chip" data-sev="medium">中</span><span class="chip" data-st="open">待处理</span></div>
+        <div class="kv">
+          <div class="k">位置</div><div class="v loc">Sources/ScreenController.swift · restoreMirrorState（asleep 则推迟）；Sources/AppDelegate.swift · applyNotConnected 空闲重试</div>
+          <div class="k">事实</div><div class="v">02:24:55 观看端断开，02:25:01 显示器就休眠了：观看端一走，screensharingd 的 UserIsActive 断言消失，而本地空闲早已超过五分钟。真正的会话结束要再经过约 15 秒守护进程滞留、两轮轮询、锁屏确认，到恢复执行时显示器几乎必然在休眠。<code>restoreMirrorState</code> 对休眠显示器会推迟并保留快照，空闲轮询每 3 秒重试。</div>
+          <div class="k">影响</div><div class="v">会话结束后 gamma 撤回、屏幕上锁、Dock 复位都会正常完成，但两块显示器会一直保持镜像，直到你回到机器前唤醒显示器，之后 3 秒内拆回扩展，期间有一次显示器重同步闪动。不是隐私问题，是体验问题。</div>
+          <div class="k">建议</div><div class="v">给恢复路径加上与 R-9 对称的唤醒：<code>restoreDisplaySettings</code> 发现镜像快照待恢复且显示器休眠时，声明一次用户活动再拆镜像，拆完让显示器按计时器自行休眠。屏幕此时已上锁，唤醒不暴露桌面。</div>
+        </div>
+      </article>
+
+      <article class="finding" id="A-5" data-sev="low" data-status="open">
+        <div class="head"><span class="id">A-5</span><h3>「远程输入不算本地活动」与事实不符</h3><span class="chip" data-sev="low">低</span><span class="chip" data-st="open">待处理</span></div>
+        <div class="kv">
+          <div class="k">位置</div><div class="v loc">CLAUDE.md · AppDelegate 段落（R-9 新增句）；提交 a22f27d 的说明</div>
+          <div class="k">事实</div><div class="v"><code>pmset -g assertions</code> 显示 screensharingd 持有 UserIsActive「Remote user active」，WindowServer 另有由 ScreensharingAgent 触发的 IOHIDSystem tickle；观看端认证时显示器立即唤醒（01:57:01、02:25:09）。显示器休眠的真实条件是远程用户连续五分钟无输入，不是「远程输入不计入」。</div>
+          <div class="k">建议</div><div class="v">改写该句：会话开始时显示器通常已被观看端连接唤醒，首轮镜像一般能成功；休眠场景出现在远程用户空闲期间 Bento 重启、唤醒后重镜像、或会话中途拓扑变化。R-9 的价值是兜底，不是主路径。同步修正记忆文件中的同一说法。</div>
+        </div>
+      </article>
+
+      <article class="finding" id="A-6" data-sev="low" data-status="open">
+        <div class="head"><span class="id">A-6</span><h3>两个提交未推送；运行中的二进制构建标签为 22aef06-dirty</h3><span class="chip" data-sev="low">低</span><span class="chip" data-st="open">待处理</span></div>
+        <div class="kv">
+          <div class="k">事实</div><div class="v"><code>git status -sb</code>：main 领先 origin/main 2 个提交（33cd0e1、a22f27d）。当前实例在提交之前构建（02:20:50），源码最后修改 02:20:20，代码与 a22f27d 完全一致，但 Info.plist 的 <code>BentoBuildCommit</code> 写的是 <code>22aef06-dirty</code>，error.log 启动行也如此。</div>
+          <div class="k">建议</div><div class="v">在本机 Terminal 推送（远程会话里的 shell 没有 GUI 钥匙串会话，推送会失败，09-08 已验证）。下次 <code>--relaunch</code> 时构建标签自然变为 a22f27d；无需为此单独重启。</div>
+        </div>
+      </article>
+
+      <article class="finding" id="A-7" data-sev="low">
+        <div class="head"><span class="id">A-7</span><h3>系统已是 macOS 27.2，文档仍写 27.0</h3><span class="chip" data-sev="info">提示</span></div>
+        <div class="kv">
+          <div class="k">事实</div><div class="v"><code>sw_vers</code>：27.2 (26B5112a)，内核 27.2.0。CLAUDE.md 与记忆文件中关于 macOS 27 的结论（菜单项图标不占布局、netstat 空表、MenuBarAgent 字典失效）都来自 27.0 Beta。本次审计没有发现与这些结论矛盾的现象，但也没有逐条复验。</div>
+        </div>
+      </article>
+
+      <article class="finding" id="A-8" data-sev="low">
+        <div class="head"><span class="id">A-8</span><h3>10-15 到今天运行的是 09-08 构建</h3><span class="chip" data-sev="info">提示</span></div>
+        <div class="kv">
+          <div class="k">事实</div><div class="v">旧实例 pid 1627 于 10-15 19:52 随登录启动，二进制为 09-08 的 22aef06，带着 A-1 的缺陷运行了六天。期间 error.log 仅两条：10-15 19:52:38 一次 <code>pgrep -fi rustdesk</code> 3 秒超时（开机瞬时负载，之后未再出现）和 10-21 17:57:29 的探测失效告警。状态栏当时应已显示带感叹号的图标与「屏幕共享探测不可用」，这正是 09-08 审计要求的可见告警在起作用。</div>
+        </div>
+      </article>
+
+      <article class="finding" id="A-9" data-sev="low">
+        <div class="head"><span class="id">A-9</span><h3>观看端 14 秒内断开重连，Bento 会话连续</h3><span class="chip" data-sev="info">提示</span></div>
+        <div class="kv">
+          <div class="k">事实</div><div class="v">02:24:55 Remove viewer，02:25:09 重新认证，守护进程 pid 51664 始终存活。探测的 <code>authenticatedProcess</code> 缓存按 pid + 启动时间命中，无需再查统一日志；<code>disconnectStreak</code> 未累计，黑屏与镜像从未撤下。这是设计中的「守护进程滞留 ~15 秒」窗口的正面案例。</div>
+        </div>
+      </article>
+
+      <article class="finding" id="A-10" data-sev="low">
+        <div class="head"><span class="id">A-10</span><h3>权限只能间接证明</h3><span class="chip" data-sev="info">提示</span></div>
+        <div class="kv">
+          <div class="k">事实</div><div class="v">审计 shell 没有完全磁盘访问，<code>~/Library/Application Support/com.apple.TCC/TCC.db</code> 打不开。<code>CGGetEventTapList</code> 显示 pid 56886 的两个 tap 均 enabled 且为主动过滤 tap（options=0），没有辅助功能与输入监控权限这类 tap 根本建不起来，因此权限有效。</div>
+        </div>
+      </article>
+
+      <article class="finding" id="A-11" data-sev="low">
+        <div class="head"><span class="id">A-11</span><h3>R-9 的「休眠先唤醒」分支尚未真实触发</h3><span class="chip" data-sev="info">提示</span></div>
+        <div class="kv">
+          <div class="k">事实</div><div class="v">02:20:51 重启时显示器恰好醒着（02:16:17 由远程输入唤醒），首轮镜像直接成功，<code>IOPMAssertionDeclareUserActivity</code> 这一支只有回归测试替身覆盖。唤醒效果本身在 02:13 的 caffeinate 实验中验证过（同一系统调用）。下一次在远程空闲期间重启 Bento、或 A-3/A-4 的修改落地时，可从 error.log 的「显示器休眠中，已请求唤醒以补配镜像」确认它工作。</div>
+        </div>
+      </article>
+    </section>
+
+    <section id="forecast">
+      <h2>断开后的预期</h2>
+      <p class="prose" style="color:var(--muted)">按当前代码和今天观察到的系统行为推演。时间以观看端断开为零点。</p>
+      <ol class="steps">
+        <li><b>0 秒</b>：观看端断开。screensharingd 丢掉 UserIsActive 断言，显示器约 6 秒后休眠（02:25:01 实测）。gamma 仍为黑。</li>
+        <li><b>约 15 秒</b>：守护进程退出。Bento 的 <code>pgrep -x screensharingd</code> 返回 1，探测变为 disconnected。</li>
+        <li><b>约 18 到 21 秒</b>：两轮连续 disconnected 后 <code>confirmedDisconnect</code>：<code>open -a ScreenSaverEngine</code>，每 0.25 秒查 <code>CGSSessionScreenIsLocked</code>。本机锁屏延迟为 immediate，预计一两秒内确认；超过 6 秒则记录告警并照常恢复。</li>
+        <li><b>确认后 0.3 秒</b>：Dock 恢复为底部自动隐藏（<code>killall Dock</code>），拆镜像因显示器休眠而推迟并保留快照，分辨率无快照跳过，gamma 撤回。屏幕此时已锁，无暴露。</li>
+        <li><b>之后每 3 秒</b>：空闲轮询因 <code>hasPendingDisplayRestore</code> 重试拆镜像，显示器休眠期间每次都推迟（只写一次日志，限速）。</li>
+        <li><b>你回到机器前</b>：唤醒显示器后 3 秒内拆回扩展，两块屏各自回到 1704×959。若未发生，菜单里的「恢复扩展显示器」是手动兜底。</li>
+      </ol>
+    </section>
+
+    <section id="sound">
+      <h2>判定稳妥的部分</h2>
+      <ul class="ok-list" style="max-width:80ch">
+        <li>三份快照的纪律在本次会话中按设计工作：Dock 与镜像快照在改动前落盘，分辨率快照因无内置屏未产生。</li>
+        <li>熄屏在镜像失败时独立成立：02:10 镜像两次失败，gamma 与 Dock 仍在一秒内就位，且 <code>sessionPrepared</code> 阻止了重复的 <code>killall Dock</code>。</li>
+        <li>探测健康告警在六周前就把问题写进了 error.log 和状态栏；这次是用户看到两块屏后来问，告警已经在那里等着。</li>
+        <li>锁定确认链路的前提都在：ScreenSaverEngine 存在，锁屏延迟 immediate，会话字典可读。</li>
+        <li>SIGTERM 优雅退出让两次 <code>--relaunch</code> 都没有留下残余快照或孤儿进程。</li>
+        <li>分屏与滚动方向的两个事件 tap 在整个会话中保持启用，菜单打开时的 tap 暂停不影响远程操作。</li>
+        <li>当前实例空闲时 CPU 为 0，无子进程滞留；<code>runProcess</code> 的看门狗在 10-15 那次 3 秒超时中按设计终止了子进程。</li>
+      </ul>
+    </section>
+
+    <section id="evidence">
+      <h2>附录：证据</h2>
+      <p class="prose" style="color:var(--muted)">观看端地址与用户名已打码；报告不保存任何认证日志中的身份信息。</p>
+      <h3>显示器与 gamma（CoreGraphics 直读，02:30）</h3>
+      <pre class="evidence">3 mirror 1 active 1 asleep 0 main 1 builtin 0 px 1704 x 959 gammaMax [0.0, 0.0, 0.0]
+2 mirror 1 active 0 asleep 0 main 0 builtin 0 px 1704 x 958 gammaMax [0.0, 0.0, 0.0]
+system_profiler: Main Display: Yes / Mirror: On / Mirror Status: Master Mirror
+                 Mirror: On / Mirror Status: Hardware Mirror</pre>
+      <h3>Bento 快照与 Dock</h3>
+      <pre class="evidence">BentoMirrorSnapshot      {"preMirrored":[],"entries":[{"displayID":2,"mirrorsDisplayID":0}]}
+BentoDockSnapshot        {"orientation":"bottom","autohide":true}
+BentoDisplayModeSnapshot (none)
+com.apple.dock orientation = left, autohide = 0</pre>
+      <h3>error.log（当前实例）</h3>
+      <pre class="evidence">[2026-10-21T18:20:51Z] Bento 启动：版本 68，提交 22aef06-dirty，构建时间 2026-10-21T18:20:50Z
+[2026-10-21T18:20:53Z] 镜像: 已把 1 块显示器合并到主屏</pre>
+      <h3>进程身份系统调用（独立复现，pid 51664）</h3>
+      <pre class="evidence">proc_pidpath ret=97 errno=1 path=/System/Library/CoreServices/RemoteManagement/screensharingd.bundle/Contents/MacOS/screensharingd
+proc_pidinfo ret=0 expected=136 errno=1 start=0          ← EPERM，R-7 的身份读取在此返回 nil
+sysctl KERN_PROC_PID ret=0 size=648 start=1792605420      ← 2026-10-22 01:57:00 +0800
+proc_pidinfo(launchd 1) ret=0 errno=1</pre>
+      <h3>电源断言与显示器电源广播</h3>
+      <pre class="evidence">pid 617(WindowServer)   UserIsActive  "com.apple.iohideventsystem.queue.tickle.nxevent ... pid:51665 process:ScreensharingAgent"
+pid 51664(screensharingd) PreventSystemSleep "Remote user is connected"
+pid 51664(screensharingd) UserIsActive       "Remote user active"
+displaysleep 5 · sleep 0 (prevented by sharingd, ChatGPT, powerd, Claude, screensharingd)
+
+01:57:01.931 Will Wake   01:57:02.317 Did Wake
+02:08:56.973 Will Dim    02:09:07.925 Will Sleep   02:09:08.050 Did Sleep
+02:13:29.403 Will Wake   02:13:32.410 Will Dim     02:13:42.618 Will Sleep   (caffeinate 实验)
+02:16:17.788 Will Wake   02:16:18.206 Did Wake
+02:25:01.052 Will Sleep  02:25:01.095 Did Sleep
+02:25:09.118 Will Wake   02:25:09.297 Did Wake</pre>
+      <h3>Bento 进程内的显示配置提交（SkyLight）</h3>
+      <pre class="evidence">02:10:00.984  Display 0x00000002: kCGSDisplayConfigMirror on   (pid 55142，显示器休眠，失败)
+02:10:11.606  Display 0x00000002: kCGSDisplayConfigMirror on   (pid 55142，显示器休眠，失败)
+02:10:20.683  QUARANTINED DUE TO HIGH LOGGING VOLUME         (该分钟 708,650 行)
+02:20:52.631  Display 0x00000002: kCGSDisplayConfigMirror on   (pid 56886，成功)</pre>
+      <h3>screensharingd 观看端事件</h3>
+      <pre class="evidence">01:57:00.703  **Starting screen sharing server daemon
+01:57:02.344  Authentication: SUCCEEDED :: User Name: ***** :: Viewer Address: ***** :: Type: RSA-SRP
+02:24:55.940  Remove viewer &lt;private&gt; from menu extra sendport 5403
+02:25:09.291  Authentication: SUCCEEDED :: User Name: ***** :: Viewer Address: ***** :: Type: RSA-SRP</pre>
+      <h3>事件 tap</h3>
+      <pre class="evidence">tap pid=56886 target=0 enabled=true options=0 mask=46         (分屏：leftMouseDown/Up/Dragged)
+tap pid=56886 target=0 enabled=true options=0 mask=20400000   (滚动方向：scrollWheel + gesture)</pre>
+    </section>
+
+    <footer>审计于 2026-10-22 02:30–02:34 CST 在远程会话进行中完成。只读取证，未修改源码；报告文件 audit/2026-10-22-audit.html。上一份报告：audit/2026-09-08-audit.html。</footer>
+  </main>
+</div>
