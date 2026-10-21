@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import IOKit.pwr_mgt
 
 // MARK: - Screen Control
 
@@ -52,10 +53,15 @@ class ScreenController {
     /// 桌面会一直停在镜像态
     var hasPendingMirrorRestore: Bool { hasMirrorSnapshot() }
 
-    func enableMirroring() {
+    /// 返回本次是否把所有非主屏配进了镜像组（已在组里 = 无需配置也算成功）。
+    /// 失败写 error.log：这条路径原来只有 NSLog，而 NSLog 在 `log show` 里是 <private>，
+    /// 2026-10-22 的会话里镜像两次失败、快照被清，error.log 一字未留
+    @discardableResult
+    func enableMirroring() -> Bool {
+        lastMirrorAttempt = Date()
         let displays = onlineDisplays()
         let main = CGMainDisplayID()
-        guard displays.count > 1 else { return }
+        guard displays.count > 1 else { return true }
 
         let hadSnapshot = hasMirrorSnapshot()
         if !hadSnapshot {
@@ -69,11 +75,12 @@ class ScreenController {
         let begin = CGBeginDisplayConfiguration(&config)
         guard begin == .success, config != nil else {
             if !hadSnapshot { clearMirrorSnapshot() }
-            NSLog("Mirroring begin failed with error \(begin.rawValue)")
-            return
+            ErrorLog.log("镜像: 开始显示配置失败 error=\(begin.rawValue)")
+            return false
         }
 
         var mirrored: [CGDirectDisplayID] = []
+        var configFailed = false
         for d in displays where d != main {
             // 已在镜像组里就不必再配一遍（硬件镜像下 CGDisplayMirrorsDisplay 恒为 0，
             // 只比它会对已经镜像好的屏重复下发配置）
@@ -82,24 +89,100 @@ class ScreenController {
             if e == .success {
                 mirrored.append(d)
             } else {
-                NSLog("Mirroring config failed for display \(d): \(e.rawValue)")
+                configFailed = true
+                ErrorLog.log("镜像: 显示器 \(d) 镜像配置失败 error=\(e.rawValue)")
             }
         }
 
         if mirrored.isEmpty {
             CGCancelDisplayConfiguration(config)
-            return
+            return !configFailed
         }
 
         let err = CGCompleteDisplayConfiguration(config, .forSession)
         if err == .success {
-            NSLog("Mirroring enabled for \(mirrored.count) display(s)")
-        } else {
-            if !hadSnapshot {
-                clearMirrorSnapshot()
-            }
-            NSLog("Mirroring enable failed with error \(err.rawValue)")
+            ErrorLog.log("镜像: 已把 \(mirrored.count) 块显示器合并到主屏")
+            return !configFailed
         }
+        if !hadSnapshot {
+            clearMirrorSnapshot()
+        }
+        // 1014 = 显示器休眠中无法重配置（本机 2026-09-08 / 2026-10-22 两次都是它）
+        ErrorLog.log("镜像: 提交显示配置失败 error=\(err.rawValue)"
+            + (anyDisplayAsleep(displays) ? "（显示器休眠中）" : ""))
+        return false
+    }
+
+    // MARK: 连接期间补镜像
+
+    private var lastMirrorAttempt: Date?
+    private var mirrorRetryFailures = 0
+    private var loggedMirrorWake = false
+    private var mirrorWakeAssertion = IOPMAssertionID(kIOPMNullAssertionID)
+    private static let mirrorRetryInterval: TimeInterval = 10
+    private static let mirrorRetryLimit = 3
+
+    /// 远程会话中每轮轮询调用：还有非主屏没进镜像组就补配。
+    ///
+    /// 必要性（2026-10-22 实测）：本机显示器本地无操作 5 分钟就休眠，远程输入不算
+    /// 活动，而显示器休眠时 CGCompleteDisplayConfiguration 返回 1014 —— 会话开始时
+    /// 若屏已睡，首轮 enableMirroring 失败、快照被清，之后再没有入口：显示器从空闲
+    /// 休眠醒来**不会**发 didChangeScreenParameters（用 caffeinate -u 唤醒 13 秒验证过），
+    /// reassertScreenOffState 永远不跑，远程画面整场都是两块屏。
+    ///
+    /// 做法：有屏未镜像时每轮声明一次用户活动（IOPMAssertionDeclareUserActivity，
+    /// 系统据此唤醒显示器并在声明有效期内维持清醒；传回同一 ID 就是续期），屏醒了
+    /// 再 enableMirroring。gamma 在屏睡着时已经压黑且休眠不清 gamma（实测休眠中
+    /// 读回仍为 0），唤醒瞬间不露桌面；保险起见唤醒后 0.6s 再补压一次。
+    /// 清醒状态下连续 mirrorRetryLimit 次失败就停（否则显示器会被一直吊着不睡），
+    /// 拓扑变化或新会话时重置。返回 true 表示本轮动了显示器（调用方应重压 gamma）。
+    @discardableResult
+    func ensureMirroringWhileConnected(now: Date = Date()) -> Bool {
+        let displays = onlineDisplays()
+        guard displays.count > 1 else { return false }
+        let main = CGMainDisplayID()
+        guard displays.contains(where: { $0 != main && !isMirrored($0) }) else {
+            mirrorRetryFailures = 0
+            loggedMirrorWake = false
+            return false
+        }
+        guard mirrorRetryFailures < Self.mirrorRetryLimit else { return false }
+
+        let asleep = anyDisplayAsleep(displays)
+        let wake = IOPMAssertionDeclareUserActivity("Bento remote mirroring" as CFString,
+                                                    kIOPMUserActiveLocal, &mirrorWakeAssertion)
+        if wake != kIOReturnSuccess {
+            ErrorLog.log("镜像: 声明用户活动以唤醒显示器失败 IOReturn=\(wake)")
+        }
+        if asleep {
+            if !loggedMirrorWake {
+                loggedMirrorWake = true
+                ErrorLog.log("镜像: 显示器休眠中，已请求唤醒以补配镜像")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                self?.reassertBlackIfNeeded()
+            }
+            return true
+        }
+        if let last = lastMirrorAttempt, now.timeIntervalSince(last) < Self.mirrorRetryInterval {
+            return false
+        }
+        loggedMirrorWake = false
+        if enableMirroring() {
+            mirrorRetryFailures = 0
+        } else {
+            mirrorRetryFailures += 1
+            if mirrorRetryFailures >= Self.mirrorRetryLimit {
+                ErrorLog.log("镜像: 显示器清醒时连续 \(Self.mirrorRetryLimit) 次补配失败，停止重试（显示器变化或下次会话再试）")
+            }
+        }
+        return true
+    }
+
+    /// 新会话开始 / 显示器拓扑变化：补镜像的放弃计数重新来过
+    func resetMirrorRetries() {
+        mirrorRetryFailures = 0
+        loggedMirrorWake = false
     }
 
     func disableMirroring(forceFallback: Bool = false) {

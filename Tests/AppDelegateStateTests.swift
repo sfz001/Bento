@@ -8,7 +8,12 @@ private final class FakeScreenController: ScreenController {
     override var isScreenBlack: Bool { black }
     override func setBlack() { events.append("black"); black = blackSucceeds }
     override func prepareResolutionSnapshot() { events.append("snapshot") }
-    override func enableMirroring() { events.append("mirror-on") }
+    override func enableMirroring() -> Bool { events.append("mirror-on"); return true }
+    var ensureTouchesDisplays = false
+    override func ensureMirroringWhileConnected(now: Date = Date()) -> Bool {
+        events.append("mirror-ensure")
+        return ensureTouchesDisplays
+    }
     override func switchResolution() { events.append("resolution") }
     override func saveDockAndSetLeft() { events.append("dock-left") }
     override func reassertBlackIfNeeded() { events.append("reassert") }
@@ -32,9 +37,16 @@ struct AppDelegateStateTests {
         precondition(screen.events == ["black", "snapshot", "mirror-on", "resolution", "dock-left", "reassert"])
         let setupCount = screen.events.count
         app.testConnect()
-        precondition(screen.events.count == setupCount, "Connected poll must not repeat setup")
+        precondition(Array(screen.events.suffix(from: setupCount)) == ["mirror-ensure"],
+                     "Connected poll must only top up mirroring, never repeat setup")
+        screen.ensureTouchesDisplays = true
+        app.testConnect()
+        precondition(Array(screen.events.suffix(2)) == ["mirror-ensure", "reassert"],
+                     "A mirror top-up that touched displays must re-press gamma")
+        screen.ensureTouchesDisplays = false
+        let afterEnsure = screen.events.count
         app.testDisconnect(screenSharing: .unknown)
-        precondition(screen.events.count == setupCount, "Unknown source must preserve black")
+        precondition(screen.events.count == afterEnsure, "Unknown source must preserve black")
         app.testDisconnect()
         precondition(!screen.events.contains("lock"))
         app.testDisconnect()
@@ -77,6 +89,7 @@ struct AppDelegateStateTests {
         fallback.testConnect()
         fallback.testConnect()
         precondition(partial.events.filter { $0 == "mirror-on" }.count == 1, "Partial gamma failure must not repeat heavy setup")
+        precondition(!partial.events.contains("mirror-ensure"), "Mirror top-up waits until gamma is black")
         fallback.testDisconnect()
         fallback.testDisconnect()
         pump(0.05)

@@ -332,6 +332,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// 远程会话中热插显示器 / 睡眠唤醒：重新镜像 + 重压 gamma（都幂等）
     private func reassertScreenOffState() {
         guard sessionPrepared, screenCtl.isScreenBlack else { return }
+        screenCtl.resetMirrorRetries()
         screenCtl.enableMirroring()
         screenCtl.reassertBlackIfNeeded()
     }
@@ -399,6 +400,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             screenCtl.setBlack()
             if !sessionPrepared {
                 sessionPrepared = true
+                screenCtl.resetMirrorRetries()
                 screenCtl.prepareResolutionSnapshot()
                 screenCtl.enableMirroring()
                 screenCtl.switchResolution()
@@ -407,6 +409,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // 显示重配置可能重置 gamma，完成后立即补压。
             screenCtl.reassertBlackIfNeeded()
             updateStatus()
+        } else if sessionPrepared {
+            // 会话中每轮补镜像：屏休眠时首轮镜像失败后没有别的入口（见 ScreenController
+            // .ensureMirroringWhileConnected）。动了显示器就重压一次 gamma
+            if screenCtl.ensureMirroringWhileConnected() {
+                screenCtl.reassertBlackIfNeeded()
+            }
         }
         lastPolledConnected = true
     }
