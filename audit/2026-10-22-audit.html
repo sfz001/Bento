@@ -146,20 +146,21 @@
     <a href="#summary">结论</a>
     <a href="#state">本机状态快照</a>
     <a href="#timeline">今天的会话时间线</a>
+    <a href="#fixes">修复与实测</a>
     <a href="#findings">发现 · 11 项</a>
-    <a href="#forecast">断开后的预期</a>
+    <a href="#forecast">断开后的预期与实际</a>
     <a href="#sound">判定稳妥的部分</a>
     <a href="#evidence">附录：证据</a>
   </nav>
 
   <main>
     <header class="hero">
-      <div class="eyebrow">审计报告 · Bento · 2026-10-22 · 远程会话进行中</div>
+      <div class="eyebrow">审计报告 · Bento · 2026-10-22 · 当日已修订</div>
       <h1>Bento 远程会话现场审计</h1>
       <p style="max-width:72ch;color:var(--muted)">在一次真实的 macOS 屏幕共享会话进行期间，对本机运行时状态的只读审计：远程会话、显示器、gamma、Dock、Bento 进程、快照、权限、日志与电源。取证时间 02:30 到 02:34（本机时区 CST）。不改任何源码。</p>
       <div class="meta">
-        <div>代码基线 <b>a22f27d</b>（领先 origin/main 2 个提交，未推送）</div>
-        <div>运行实例 <b>pid 56886 · 02:20:51 启动</b></div>
+        <div>审计基线 <b>a22f27d</b> · 修复后 <b>20b4040</b>（已推送）</div>
+        <div>运行实例 <b>审计时 pid 56886 · 修复后 pid 62843</b></div>
         <div>系统 <b>macOS 27.2 (26B5112a)</b></div>
         <div>硬件 <b>M4 Pro · 两块 Studio Display · 无内置屏</b></div>
         <div>远程来源 <b>macOS 屏幕共享 · screensharingd pid 51664</b></div>
@@ -169,22 +170,26 @@
 
     <section id="summary">
       <h2>结论</h2>
+      <div class="callout note">
+        <div class="eyebrow">修订 · 02:55</div>
+        <p><b>六项可修复的发现都已处理，并已推送到 origin/main。</b>A-3、A-4、A-5 各自单独提交，A-6 的推送与构建标签随之解决。远程会话在 02:36 结束，正好让 A-4 的新路径在真实场景里跑了一遍：修复后的实例启动后唤醒已锁屏的休眠显示器，0.46 秒后拆回扩展。详见<a href="#fixes">修复与实测</a>。其余五项是提示，没有缺陷可修。</p>
+      </div>
       <div class="prose">
         <p><b>此刻本机处于正确的隐私状态：两块显示器 gamma 全黑、已合并为硬件镜像、Dock 在左侧、探测健康。</b>这是本机自 2026-09-08 之后第一次完整走通「检测 → 熄屏 → 镜像 → Dock」的连接链路。</p>
         <p>今天解决了两个问题。第一个是根因：R-7（09-08 15:30）引入的进程身份校验用 <code>proc_pidinfo</code> 读 root 守护进程，普通用户进程拿到 EPERM，屏幕共享探测自那天起每轮都是 unknown，六周内没有任何会话被认定为已连接。第二个是显示器休眠：远程用户五分钟不操作，显示器就进入休眠，休眠中 CoreGraphics 拒绝镜像配置，而显示器醒来不会触发任何重试入口。两项都已修复、提交并在当前会话中实测生效。</p>
-        <p>剩下四项待处理，没有一项影响当前会话的隐私，但有两项会影响断开后的体验：断开时显示器大概率已经休眠，镜像要等你回到机器前唤醒显示器后才会拆回扩展；以及一次镜像重配置在休眠显示器上可能让 Bento 在一分钟里刷出七十万行系统日志并被系统限流。</p>
+        <p>审计时剩下四项待处理，没有一项影响会话隐私，但有两项影响断开后的体验：断开时显示器大概率已经休眠，镜像要等本地唤醒才拆回扩展；以及在休眠显示器上的镜像重配置曾让 Bento 一分钟刷出七十万行系统日志并被限流。四项已在当日修复。</p>
       </div>
       <div class="score" aria-label="发现统计">
         <div class="tile" data-k="critical"><div class="n">0</div><div class="l">严重</div></div>
         <div class="tile" data-k="high"><div class="n">2</div><div class="l">高 · 今日已修</div></div>
         <div class="tile" data-k="medium"><div class="n">2</div><div class="l">中</div></div>
         <div class="tile" data-k="low"><div class="n">7</div><div class="l">低 / 提示</div></div>
-        <div class="tile" data-k="done"><div class="n">2</div><div class="l">已修复并实测</div></div>
-        <div class="tile" data-k="open"><div class="n">4</div><div class="l">待处理</div></div>
+        <div class="tile" data-k="done"><div class="n">6</div><div class="l">已修复</div></div>
+        <div class="tile" data-k="open"><div class="n">0</div><div class="l">待处理</div></div>
       </div>
       <div class="callout note">
         <div class="eyebrow">一个事实更正</div>
-        <p>今天早些时候的分析、CLAUDE.md 新增段落和 R-9 提交说明都写了「远程输入不算本地活动」。取证推翻了这句话：<code>screensharingd</code> 在远程输入时持有名为 <code>Remote user active</code> 的 UserIsActive 断言，观看端认证成功时显示器立即唤醒（01:57:01、02:25:09 两次都是）。准确的说法是：<b>远程用户连续五分钟不操作，显示器才休眠</b>。会话开始时显示器通常是醒的，今天 02:10 那次镜像失败是因为 Bento 在远程用户空闲期间重启。见 <a href="#A-5">A-5</a>。</p>
+        <p>今天早些时候的分析、CLAUDE.md 新增段落和 R-9 提交说明都写了「远程输入不算本地活动」（文档与注释已在 20b4040 更正）。取证推翻了这句话：<code>screensharingd</code> 在远程输入时持有名为 <code>Remote user active</code> 的 UserIsActive 断言，观看端认证成功时显示器立即唤醒（01:57:01、02:25:09 两次都是）。准确的说法是：<b>远程用户连续五分钟不操作，显示器才休眠</b>。会话开始时显示器通常是醒的，今天 02:10 那次镜像失败是因为 Bento 在远程用户空闲期间重启。见 <a href="#A-5">A-5</a>。</p>
       </div>
     </section>
 
@@ -238,6 +243,36 @@
       </div>
     </section>
 
+    <section id="fixes">
+      <h2>修复与实测</h2>
+      <p class="prose" style="color:var(--muted)">每项单独提交，8 组回归测试在每次提交前全部通过。新增测试以同模块函数替换锁屏查询与唤醒调用，测试计数证明它们没有碰真实显示器。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>编号</th><th>提交</th><th>做了什么</th><th>验证</th></tr></thead>
+          <tbody>
+            <tr><td class="nw"><a href="#A-3">A-3</a></td><td class="nw mono">a71ce32</td><td>任一显示器休眠时，<code>enableMirroring</code> 直接返回失败。它不存快照，也不提交配置，只写一行 error.log。会话中休眠屏的补配只走轮询唤醒路径。</td><td>镜像测试：休眠时零提交且无快照，醒后合并成功，已镜像时不重复提交。</td></tr>
+            <tr><td class="nw"><a href="#A-4">A-4</a></td><td class="nw mono">950de12</td><td>自动拆镜像遇到休眠时，若会话已锁定就声明一次用户活动来唤醒显示器，下一轮轮询即可拆除。未锁定时绝不唤醒。每份快照最多唤醒 3 次，快照清除或新会话时额度归零。</td><td>镜像测试：未锁定零唤醒，已锁定封顶 3 次，两种重置各自生效。另有真实场景验证，见下方时间线。</td></tr>
+            <tr><td class="nw"><a href="#A-5">A-5</a></td><td class="nw mono">20b4040</td><td>CLAUDE.md 与 <code>ensureMirroringWhileConnected</code> 注释改为：远程输入也算输入，远程用户空闲 5 分钟后显示器才休眠。</td><td>仓库中已无旧说法。</td></tr>
+            <tr><td class="nw"><a href="#A-6">A-6</a></td><td class="nw mono">—</td><td><code>git push</code> 推送 22aef06 到 20b4040 共 6 个提交。这次会话运行在图形登录上下文（Aqua），推送没有遇到 9 月 8 日的钥匙串错误。</td><td><code>main...origin/main</code> 已同步，新实例构建标签为 20b4040。</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <h3>断开与修复后重启：02:36 到 02:51</h3>
+      <div class="timeline">
+        <div class="row"><div class="t">02:36:41.17</div><div class="rail"><span class="dot"></span></div><div class="e">观看端断开。<code>ScreensharingAgent</code>（pid 51665）在同一刻请求 loginwindow 立即锁屏 <span class="who">系统</span></div></div>
+        <div class="row"><div class="t">02:36:46.3</div><div class="rail"><span class="dot"></span></div><div class="e">显示器休眠，比断开晚 5 秒 <span class="who">WindowServer</span></div></div>
+        <div class="row"><div class="t">02:36:56.2</div><div class="rail"><span class="dot"></span></div><div class="e"><code>screensharingd</code> 等满 15 秒后退出：No viewers so time to exit <span class="who">screensharingd</span></div></div>
+        <div class="row" data-kind="bento"><div class="t">02:37:01.6</div><div class="rail"><span class="dot"></span></div><div class="e">旧实例确认断开。屏幕已锁，锁定确认立即通过，随后恢复 Dock 并撤黑 <span class="who">Bento 56886</span></div></div>
+        <div class="row" data-kind="fail"><div class="t">02:37 – 02:51</div><div class="rail"><span class="dot"></span></div><div class="e">显示器休眠，旧实例的拆镜像每 3 秒推迟一次，两块屏一直镜像。这正是 A-4 描述的情况 <span class="who">Bento 56886</span></div></div>
+        <div class="row" data-kind="bento"><div class="t">02:51:03.4</div><div class="rail"><span class="dot"></span></div><div class="e">修复后的实例（20b4040）启动。它发现显示器休眠、屏幕已锁、快照待恢复，于是请求唤醒 <span class="who">Bento 62843</span></div></div>
+        <div class="row" data-kind="ok"><div class="t">02:51:03.9</div><div class="rail"><span class="dot"></span></div><div class="e">提交 <code>kCGSDisplayConfigMirror off</code>，拆回扩展，镜像与 Dock 快照全部清除 <span class="who">Bento 62843</span></div></div>
+        <div class="row"><div class="t">02:51:33.9</div><div class="rail"><span class="dot"></span></div><div class="e">锁屏画面上的显示器 30 秒后自行休眠 <span class="who">WindowServer</span></div></div>
+      </div>
+      <div class="prose">
+        <p>修复后取证（02:52）：屏幕已锁定，两块显示器都是扩展状态并在休眠，Dock 恢复为底部自动隐藏，三份快照都已清空，<code>screensharingd</code> 不在运行。R-9 的「连接中先唤醒再镜像」分支仍没有在真实会话里触发过，见 <a href="#A-11">A-11</a>。</p>
+      </div>
+    </section>
+
     <section id="findings">
       <h2>发现 · 11 项</h2>
       <div class="table-wrap">
@@ -246,10 +281,10 @@
           <tbody>
             <tr><td class="nw"><a href="#A-1">A-1</a></td><td class="nw"><span class="chip" data-sev="high">高</span></td><td class="nw"><span class="chip" data-st="done">已修复 33cd0e1</span></td><td>屏幕共享探测自 R-7 起永久 unknown：proc_pidinfo 对 root 守护进程返回 EPERM</td></tr>
             <tr><td class="nw"><a href="#A-2">A-2</a></td><td class="nw"><span class="chip" data-sev="high">高</span></td><td class="nw"><span class="chip" data-st="done">已修复 a22f27d</span></td><td>显示器休眠时镜像失败且永不重试</td></tr>
-            <tr><td class="nw"><a href="#A-3">A-3</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td>镜像重配置在休眠显示器上可触发 SkyLight 自旋，一分钟 70 万行日志并被限流</td></tr>
-            <tr><td class="nw"><a href="#A-4">A-4</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td>断开时显示器大概率已休眠，拆镜像要等本地唤醒</td></tr>
-            <tr><td class="nw"><a href="#A-5">A-5</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td>CLAUDE.md 与 R-9 提交说明中「远程输入不算活动」与事实不符</td></tr>
-            <tr><td class="nw"><a href="#A-6">A-6</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="open">待处理</span></td><td>两个提交未推送；运行中的二进制构建标签为 22aef06-dirty</td></tr>
+            <tr><td class="nw"><a href="#A-3">A-3</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复 a71ce32</span></td><td>镜像重配置在休眠显示器上可触发 SkyLight 自旋，一分钟 70 万行日志并被限流</td></tr>
+            <tr><td class="nw"><a href="#A-4">A-4</a></td><td class="nw"><span class="chip" data-sev="medium">中</span></td><td class="nw"><span class="chip" data-st="done">已修复 950de12</span></td><td>断开时显示器大概率已休眠，拆镜像要等本地唤醒</td></tr>
+            <tr><td class="nw"><a href="#A-5">A-5</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="done">已修复 20b4040</span></td><td>CLAUDE.md 与 R-9 提交说明中「远程输入不算活动」与事实不符</td></tr>
+            <tr><td class="nw"><a href="#A-6">A-6</a></td><td class="nw"><span class="chip" data-sev="low">低</span></td><td class="nw"><span class="chip" data-st="done">已修复 已推送</span></td><td>两个提交未推送；运行中的二进制构建标签为 22aef06-dirty</td></tr>
             <tr><td class="nw"><a href="#A-7">A-7</a></td><td class="nw"><span class="chip" data-sev="info">提示</span></td><td class="nw">—</td><td>系统已是 macOS 27.2 (26B5112a)，文档与记忆仍写 27.0</td></tr>
             <tr><td class="nw"><a href="#A-8">A-8</a></td><td class="nw"><span class="chip" data-sev="info">提示</span></td><td class="nw">—</td><td>10-15 到今天运行的是 09-08 构建；期间一次 pgrep 3 秒超时为开机瞬时负载</td></tr>
             <tr><td class="nw"><a href="#A-9">A-9</a></td><td class="nw"><span class="chip" data-sev="info">提示</span></td><td class="nw">—</td><td>观看端 14 秒内断开重连，Bento 会话连续，行为正确</td></tr>
@@ -277,40 +312,44 @@
         </div>
       </article>
 
-      <article class="finding" id="A-3" data-sev="medium" data-status="open">
-        <div class="head"><span class="id">A-3</span><h3>镜像重配置在休眠显示器上可触发 SkyLight 自旋与日志限流</h3><span class="chip" data-sev="medium">中</span><span class="chip" data-st="open">待处理</span></div>
+      <article class="finding" id="A-3" data-sev="medium" data-status="done">
+        <div class="head"><span class="id">A-3</span><h3>镜像重配置在休眠显示器上可触发 SkyLight 自旋与日志限流</h3><span class="chip" data-sev="medium">中</span><span class="chip" data-st="done">已修复 a71ce32</span></div>
         <div class="kv">
           <div class="k">位置</div><div class="v loc">Sources/AppDelegate.swift · reassertScreenOffState；Sources/ScreenController.swift · enableMirroring</div>
           <div class="k">事实</div><div class="v">02:10 那一分钟旧实例写了 708,650 行统一日志，全部是 SkyLight 的「Waiting for previous reconfig to complete」，02:10:20 进程被 <code>libsystem_trace</code> 标记 QUARANTINED DUE TO HIGH LOGGING VOLUME。时序：02:10:00.98 第一次镜像提交在休眠显示器上挂起，02:10:11.6 <code>didChangeScreenParameters</code> 触发的 <code>reassertScreenOffState</code> 又调了一次 <code>enableMirroring</code>，SkyLight 在进程内忙等前一次重配置完成并持续打日志。</div>
           <div class="k">影响</div><div class="v">限流后该进程后续的 os_log 全部丢失（包括 NSLog 诊断），CPU 在忙等期间被占用。R-9 把轮询路径的重试拉开到 10 秒，但 <code>reassertScreenOffState</code> 仍可在前一次重配置未完成时再次进入。当前实例未再出现（02:20 后每分钟个位数行）。</div>
           <div class="k">建议</div><div class="v">在 <code>ScreenController</code> 记录「上次提交显示配置的时刻」，距上次提交不足 N 秒（或 <code>CGDisplayIsAsleep</code> 为真）时让 <code>reassertScreenOffState</code> 只重压 gamma、不再提交镜像；镜像交给轮询路径的 <code>ensureMirroringWhileConnected</code> 统一处理。</div>
+          <div class="k">修复</div><div class="v"><code>enableMirroring</code> 开始配置前检查 <code>CGDisplayIsAsleep</code>，任一屏休眠即返回失败。它不存快照、不提交，并写一行 error.log。<code>reassertScreenOffState</code> 因此不会再在休眠屏上二次提交。<code>lastMirrorAttempt</code> 只在真正开始配置时更新。</div>
         </div>
       </article>
 
-      <article class="finding" id="A-4" data-sev="medium" data-status="open">
-        <div class="head"><span class="id">A-4</span><h3>断开时显示器大概率已休眠，拆镜像要等本地唤醒</h3><span class="chip" data-sev="medium">中</span><span class="chip" data-st="open">待处理</span></div>
+      <article class="finding" id="A-4" data-sev="medium" data-status="done">
+        <div class="head"><span class="id">A-4</span><h3>断开时显示器大概率已休眠，拆镜像要等本地唤醒</h3><span class="chip" data-sev="medium">中</span><span class="chip" data-st="done">已修复 950de12</span></div>
         <div class="kv">
           <div class="k">位置</div><div class="v loc">Sources/ScreenController.swift · restoreMirrorState（asleep 则推迟）；Sources/AppDelegate.swift · applyNotConnected 空闲重试</div>
           <div class="k">事实</div><div class="v">02:24:55 观看端断开，02:25:01 显示器就休眠了：观看端一走，screensharingd 的 UserIsActive 断言消失，而本地空闲早已超过五分钟。真正的会话结束要再经过约 15 秒守护进程滞留、两轮轮询、锁屏确认，到恢复执行时显示器几乎必然在休眠。<code>restoreMirrorState</code> 对休眠显示器会推迟并保留快照，空闲轮询每 3 秒重试。</div>
           <div class="k">影响</div><div class="v">会话结束后 gamma 撤回、屏幕上锁、Dock 复位都会正常完成，但两块显示器会一直保持镜像，直到你回到机器前唤醒显示器，之后 3 秒内拆回扩展，期间有一次显示器重同步闪动。不是隐私问题，是体验问题。</div>
           <div class="k">建议</div><div class="v">给恢复路径加上与 R-9 对称的唤醒：<code>restoreDisplaySettings</code> 发现镜像快照待恢复且显示器休眠时，声明一次用户活动再拆镜像，拆完让显示器按计时器自行休眠。屏幕此时已上锁，唤醒不暴露桌面。</div>
+          <div class="k">修复</div><div class="v"><code>restoreMirrorState</code> 因休眠推迟时，若 <code>CGSSessionScreenIsLocked</code> 为真，就调用 <code>IOPMAssertionDeclareUserActivity</code> 唤醒显示器。每份快照最多 3 次，快照清除或 <code>resetMirrorRetries</code> 时归零，未锁定时绝不唤醒。真实场景在 02:51 验证通过，唤醒到拆除共 0.46 秒，显示器 30 秒后在锁屏画面上自行休眠。</div>
         </div>
       </article>
 
-      <article class="finding" id="A-5" data-sev="low" data-status="open">
-        <div class="head"><span class="id">A-5</span><h3>「远程输入不算本地活动」与事实不符</h3><span class="chip" data-sev="low">低</span><span class="chip" data-st="open">待处理</span></div>
+      <article class="finding" id="A-5" data-sev="low" data-status="done">
+        <div class="head"><span class="id">A-5</span><h3>「远程输入不算本地活动」与事实不符</h3><span class="chip" data-sev="low">低</span><span class="chip" data-st="done">已修复 20b4040</span></div>
         <div class="kv">
           <div class="k">位置</div><div class="v loc">CLAUDE.md · AppDelegate 段落（R-9 新增句）；提交 a22f27d 的说明</div>
           <div class="k">事实</div><div class="v"><code>pmset -g assertions</code> 显示 screensharingd 持有 UserIsActive「Remote user active」，WindowServer 另有由 ScreensharingAgent 触发的 IOHIDSystem tickle；观看端认证时显示器立即唤醒（01:57:01、02:25:09）。显示器休眠的真实条件是远程用户连续五分钟无输入，不是「远程输入不计入」。</div>
           <div class="k">建议</div><div class="v">改写该句：会话开始时显示器通常已被观看端连接唤醒，首轮镜像一般能成功；休眠场景出现在远程用户空闲期间 Bento 重启、唤醒后重镜像、或会话中途拓扑变化。R-9 的价值是兜底，不是主路径。同步修正记忆文件中的同一说法。</div>
+          <div class="k">修复</div><div class="v">CLAUDE.md 与代码注释已更正。R-9 的提交说明留在历史中，以 20b4040 为准。</div>
         </div>
       </article>
 
-      <article class="finding" id="A-6" data-sev="low" data-status="open">
-        <div class="head"><span class="id">A-6</span><h3>两个提交未推送；运行中的二进制构建标签为 22aef06-dirty</h3><span class="chip" data-sev="low">低</span><span class="chip" data-st="open">待处理</span></div>
+      <article class="finding" id="A-6" data-sev="low" data-status="done">
+        <div class="head"><span class="id">A-6</span><h3>两个提交未推送；运行中的二进制构建标签为 22aef06-dirty</h3><span class="chip" data-sev="low">低</span><span class="chip" data-st="done">已修复</span></div>
         <div class="kv">
           <div class="k">事实</div><div class="v"><code>git status -sb</code>：main 领先 origin/main 2 个提交（33cd0e1、a22f27d）。当前实例在提交之前构建（02:20:50），源码最后修改 02:20:20，代码与 a22f27d 完全一致，但 Info.plist 的 <code>BentoBuildCommit</code> 写的是 <code>22aef06-dirty</code>，error.log 启动行也如此。</div>
           <div class="k">建议</div><div class="v">在本机 Terminal 推送（远程会话里的 shell 没有 GUI 钥匙串会话，推送会失败，09-08 已验证）。下次 <code>--relaunch</code> 时构建标签自然变为 a22f27d；无需为此单独重启。</div>
+          <div class="k">修复</div><div class="v">6 个提交已推送（22aef06..20b4040），<code>main...origin/main</code> 已同步。02:51 重启后，Info.plist 与 error.log 启动行都记为 20b4040。</div>
         </div>
       </article>
 
@@ -345,13 +384,13 @@
       <article class="finding" id="A-11" data-sev="low">
         <div class="head"><span class="id">A-11</span><h3>R-9 的「休眠先唤醒」分支尚未真实触发</h3><span class="chip" data-sev="info">提示</span></div>
         <div class="kv">
-          <div class="k">事实</div><div class="v">02:20:51 重启时显示器恰好醒着（02:16:17 由远程输入唤醒），首轮镜像直接成功，<code>IOPMAssertionDeclareUserActivity</code> 这一支只有回归测试替身覆盖。唤醒效果本身在 02:13 的 caffeinate 实验中验证过（同一系统调用）。下一次在远程空闲期间重启 Bento、或 A-3/A-4 的修改落地时，可从 error.log 的「显示器休眠中，已请求唤醒以补配镜像」确认它工作。</div>
+          <div class="k">事实</div><div class="v">02:20:51 重启时显示器恰好醒着（02:16:17 由远程输入唤醒），首轮镜像直接成功，<code>IOPMAssertionDeclareUserActivity</code> 这一支只有回归测试替身覆盖。同一个系统调用在断开收尾路径（A-4）已于 02:51 真实生效。唤醒效果本身在 02:13 的 caffeinate 实验中验证过（同一系统调用）。下一次在远程空闲期间重启 Bento、或 A-3/A-4 的修改落地时，可从 error.log 的「显示器休眠中，已请求唤醒以补配镜像」确认它工作。</div>
         </div>
       </article>
     </section>
 
     <section id="forecast">
-      <h2>断开后的预期</h2>
+      <h2>断开后的预期与实际</h2>
       <p class="prose" style="color:var(--muted)">按当前代码和今天观察到的系统行为推演。时间以观看端断开为零点。</p>
       <ol class="steps">
         <li><b>0 秒</b>：观看端断开。screensharingd 丢掉 UserIsActive 断言，显示器约 6 秒后休眠（02:25:01 实测）。gamma 仍为黑。</li>
@@ -361,6 +400,10 @@
         <li><b>之后每 3 秒</b>：空闲轮询因 <code>hasPendingDisplayRestore</code> 重试拆镜像，显示器休眠期间每次都推迟（只写一次日志，限速）。</li>
         <li><b>你回到机器前</b>：唤醒显示器后 3 秒内拆回扩展，两块屏各自回到 1704×959。若未发生，菜单里的「恢复扩展显示器」是手动兜底。</li>
       </ol>
+      <div class="callout note">
+        <div class="eyebrow">实际结果</div>
+        <p>推演基本成立，只有两处不同。第一，系统在观看端断开的同一刻就锁了屏，比 Bento 自己的锁屏请求早 15 秒，所以锁定确认立即通过。第二，第 6 步不再需要本地唤醒：修复后的实例在已锁屏时主动唤醒显示器，几分之一秒内拆回扩展。完整时间线见<a href="#fixes">修复与实测</a>。</p>
+      </div>
     </section>
 
     <section id="sound">
@@ -424,6 +467,6 @@ displaysleep 5 · sleep 0 (prevented by sharingd, ChatGPT, powerd, Claude, scree
 tap pid=56886 target=0 enabled=true options=0 mask=20400000   (滚动方向：scrollWheel + gesture)</pre>
     </section>
 
-    <footer>审计于 2026-10-22 02:30–02:34 CST 在远程会话进行中完成。只读取证，未修改源码；报告文件 audit/2026-10-22-audit.html。上一份报告：audit/2026-09-08-audit.html。</footer>
+    <footer>审计于 2026-10-22 02:30–02:34 CST 在远程会话进行中完成，取证期间未修改源码。同日 02:40–02:55 按发现逐项修复（a71ce32、950de12、20b4040）并推送，本页随之修订。报告文件 audit/2026-10-22-audit.html，上一份报告 audit/2026-09-08-audit.html。</footer>
   </main>
 </div>
