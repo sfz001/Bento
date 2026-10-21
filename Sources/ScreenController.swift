@@ -136,11 +136,14 @@ class ScreenController {
 
     /// 远程会话中每轮轮询调用：还有非主屏没进镜像组就补配。
     ///
-    /// 必要性（2026-10-22 实测）：本机显示器本地无操作 5 分钟就休眠，远程输入不算
-    /// 活动，而显示器休眠时 CGCompleteDisplayConfiguration 返回 1014 —— 会话开始时
-    /// 若屏已睡，首轮 enableMirroring 失败、快照被清，之后再没有入口：显示器从空闲
-    /// 休眠醒来**不会**发 didChangeScreenParameters（用 caffeinate -u 唤醒 13 秒验证过），
-    /// reassertScreenOffState 永远不跑，远程画面整场都是两块屏。
+    /// 必要性（2026-10-22 实测）：本机显示器 5 分钟无输入就休眠，而显示器休眠时
+    /// CGCompleteDisplayConfiguration 返回 1014。远程输入也算输入（screensharingd 持有
+    /// UserIsActive「Remote user active」断言，观看端认证时显示器立即唤醒），所以新会话
+    /// 开始时屏一般醒着、首轮镜像能成；但远程用户空闲 5 分钟后屏照样会睡，此时 Bento
+    /// 重启（当天 02:10 就是这样）或拓扑变化后重镜像，碰上的就是休眠屏。首轮失败后
+    /// 原本再没有入口：显示器从空闲休眠醒来**不会**发 didChangeScreenParameters
+    ///（用 caffeinate -u 唤醒 13 秒验证过），reassertScreenOffState 永远不跑，
+    /// 远程画面整场都是两块屏。
     ///
     /// 做法：有屏未镜像时每轮声明一次用户活动（IOPMAssertionDeclareUserActivity，
     /// 系统据此唤醒显示器并在声明有效期内维持清醒；传回同一 ID 就是续期），屏醒了
