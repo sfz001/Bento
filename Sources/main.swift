@@ -3,6 +3,8 @@ import Foundation
 
 // MARK: - Main
 
+if ClaudeGuardCommand.runIfRequested() { exit(0) }
+
 // 单实例运行：已有同 Bundle ID 的实例在跑则退出——但必须留痕（同步写，马上 exit）。
 // 静默退出的后果：重建后启动新包，旧实例还在，新实例悄悄消失，看起来就像
 // 「修好了却没生效」。换新构建请先退出旧实例，或用 ./build_app.sh --relaunch

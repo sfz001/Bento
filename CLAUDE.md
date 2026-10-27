@@ -10,6 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 3. **Window tiling (分屏)** — MaxTo/Moom-style per-monitor split layouts, edited via a WYSIWYG full-screen overlay editor on each real display, persisted per-display (keyed by CGDisplay UUID) in `~/Library/Application Support/Bento/config.json`. Gestures: **double-click a titlebar** = snap the window into the cell under the click point (double-click again while in the cell = restore); **Shift + double-click** = maximize to the screen; **Shift + drag a titlebar** = snap to the cell highlighted on a grid overlay; **fling a titlebar** (fast upward flick, or fast back-and-forth wiggle) = maximize to the screen; a plain drag or edge-resize cancels the snap state.
 4. **Menu bar icon manager (菜单栏图标管理, currently disabled)** — Retained Bartender/Ice-style selective hide/show of menu bar icons: menu opens a checklist window (NSTableView) listing every third-party icon by owning app **plus movable system modules** (Battery/Wi-Fi/User Switching; Clock and Control Center are pinned by the system and excluded) **plus Bento's own icon** (sortable, not hideable); unchecking hides an icon into the system "«" overflow section, checking shows it again; rows are **drag-reorderable** and the row order is applied to the real menu bar (persisted as `MenuBarIconOrder`). Moves use one of two auto-selected levers: rewriting `com.apple.MenuBarAgent`'s `TrailingItemPreferredPositions` plist (macOS 27 Beta 4 — no synthetic drags), or synthetic ⌘-drags (Beta 5+ — the dict became write-immune; see the module section). There is no forced-hide primitive on 27, so on a roomy bar hidden items can become visible again. Hidden keys persist in UserDefaults (`HiddenMenuBarItemKeys`) and change **only** through the manager UI.
 5. **Sleep guard (防止睡眠)** — Caffeine/Amphetamine-style keep-awake. Exactly two plain menu rows: **永久防睡** (checkmark toggle) and **定时防睡 ▸** (30 min / 1 h / 2 h / 4 h presets, then 防睡设置… which opens a window for custom minutes, allow-display-sleep mode, and low-battery auto-stop). Backed by a single `IOPMAssertion`; state is deliberately **not** persisted across launches.
+6. **Claude proxy guard (Claude 防直连)** — Embedded root LaunchDaemon registered with `SMAppService.daemon`; authenticated XPC, fail-closed `/etc/hosts` maintenance, once-per-second Clash/TUN verification, and persistent Clash Verge Merge rules. Protection survives App exit and reboot; disabling cleans managed sections and unregisters the daemon.
 
 The project began as `RustDeskScreenOff` (remote screen-off only) before growing into Bento; repo/dir/app/bundle are all `Bento` now.
 
@@ -18,7 +19,7 @@ The project began as `RustDeskScreenOff` (remote screen-off only) before growing
 ```bash
 ./build_app.sh             # Compile arm64, package .app bundle (icon from Assets/AppIcon.icns)
 ./build_app.sh --check     # Seconds-fast typecheck only — no binary, no bundle
-./build_app.sh --test      # Eight regression suites; no physical display or Dock changes
+./build_app.sh --test      # Nine regression suites; no physical display or Dock changes
 BUILD_UNIVERSAL=1 ./build_app.sh   # arm64 + x86_64 universal binary
 open Bento.app             # Run
 ./build_app.sh --relaunch  # Build, then quit the running instance (SIGTERM → graceful terminate) and open the new bundle
@@ -38,6 +39,8 @@ Code lives in `Sources/`, one file per module, compiled together by `build_app.s
 - `Sources/LayoutModel.swift`, `Sources/TilingGeometry.swift`, `Sources/MenuBarSemantics.swift`, `Sources/LogRateLimiter.swift` — logic extracted for focused tests
 - `Sources/CrashSignal.c`, `Sources/CrashLogging.swift` — async-signal-safe fatal markers and installation
 - `Sources/main.swift` — single-instance guard, exception/signal logging, build metadata, NSApplication bootstrap
+- `Sources/ClaudeGuardProtocol.swift`, `Sources/ClaudeGuardController.swift` — fixed XPC surface, daemon registration/status and Chinese menu/help UI. The daemon build also compiles the protocol but has its own entry point.
+- `ClaudeGuard/main.swift`, `ClaudeGuardDaemon.swift` — separate daemon entry, one-second serial loop, persistent enabled state, and per-call audit-token + designated-requirement validation. `ClaudeGuardHosts.swift` owns the 22 built-in domains and locked/atomic managed-section writes; `ClaudeGuardEngine.swift` emits DNS flushes only on actual hosts changes. `ClashProbe.swift` requires core identity, active config, declared interface address, actual route and controller/rules evidence. `ClashMerge.swift` only edits marked persistent Merge sections. Do not put daemon top-level code under `Sources/`, where the App wildcard would compile it.
 
 File-scope `private`/`fileprivate` declarations don't cross these file boundaries — anything shared between modules belongs in `Support.swift` as internal.
 
@@ -122,7 +125,7 @@ File-scope `private`/`fileprivate` declarations don't cross these file boundarie
 
 ## 当前测试与操作边界
 
-- `./build_app.sh --test` 顺序执行 8 组测试，详见 `Tests/README.md`。AppDelegate 测试直接使用生产会话代码并注入显示控制器、锁定查询；不安装状态菜单或 event tap，不触发真实黑屏/锁屏。布局树、手势、图标状态、日志限速分离为不依赖 AppKit 的模型。
+- `./build_app.sh --test` 顺序执行 9 组测试，详见 `Tests/README.md`。AppDelegate 测试直接使用生产会话代码并注入显示控制器、锁定查询；不安装状态菜单或 event tap，不触发真实黑屏/锁屏。布局树、手势、图标状态、日志限速分离为不依赖 AppKit 的模型。
 - 菜单「熄屏流程演练…」仅在监控开启且无会话时可开始，用户确认后走真实连接处理与锁定恢复，10 秒自动收尾；真实连接取消演练计时并接管。不要为了自动测试而调用真实硬件演练。
 - 等待锁定期间保留 sessionPrepared，实际恢复开始才清除，保证重连后的热插/唤醒保护；pendingRestore 存在时不重复启动断开收尾。
 - 滚动自愈调用 start(promptForPermissions: false)，只有启动和用户手动重试可请求授权。权限界面与用途说明为中文。

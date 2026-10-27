@@ -60,6 +60,27 @@ A single app for a grab-bag of small personal utilities. Currently: remote-conne
 - 无法阻止合盖睡眠（Apple Silicon 上没有不装内核扩展的做法），设置窗口里有说明
 - 不需要任何额外权限
 
+#### 6. Claude 的 Clash 联动防直连保护
+
+- 菜单「Claude 防直连」中开启后，内嵌 root LaunchDaemon 每秒检测 Clash 核心、实际 TUN 配置、TUN 地址、默认路由、控制接口及最终代理规则；任一环节失败都默认阻断
+- 未就绪时仅在 `/etc/hosts` 的 `# BEGIN/END CLAUDE PROXY GUARD` 段内阻断指定 Claude/Anthropic 域名（IPv4 和 IPv6）；恢复就绪后自动移除。只有内容变化才原子写入并刷新 DNS
+- 五条 `DOMAIN-SUFFIX` 规则持久写入 Clash Verge 的 Merge 标记段，默认走 `PROXY`；不修改订阅。规则被覆盖或无法验证时保持阻断并提示配置错误
+- App 退出不影响防护；Mac 重启后守护按上次开启状态自动恢复，无需登录图形界面。关闭开关或选择「恢复 hosts 并卸载守护…」会清理 hosts/Merge 并注销守护
+- 首次启用可能需在「系统设置 → 通用 → 登录项与扩展 → 在后台允许」批准 Bento；菜单会显示该状态并引导打开设置
+- 原有 Merge 已包含 `prepend-rules` 时不会擅自合并，需按「防护说明与排错…」手动处理
+- **限制**：hosts 不支持通配符，`*.frame.claudeusercontent.com`、`*.claudemcpcontent.com` 等动态子域名无法完整覆盖，不保证阻断所有未知子域名
+- 切换 Clash/TUN 后若仍使用旧解析，请重启浏览器或 Claude Code
+
+远程排错或菜单不可用时可使用同一签名 App 的受限命令（仍经过 daemon 的 XPC 签名校验）：
+
+```bash
+Bento.app/Contents/MacOS/Bento --claude-guard on
+Bento.app/Contents/MacOS/Bento --claude-guard status
+Bento.app/Contents/MacOS/Bento --claude-guard off   # 清理 hosts/Merge 并注销守护
+```
+
+`off` 只有在清理成功后才会注销；若 daemon 尚未注册，会先请求注册以便执行清理。系统后台项目批准仍需要图形界面和管理员认证，SSH 中不能代为绕过。
+
 ### 使用方法
 
 ```bash
@@ -79,6 +100,13 @@ open Bento.app
 
 - macOS 14.0 (Sonoma) 或更高版本；停用中的菜单栏图标管理模块面向 macOS 27+
 - 远程熄屏功能需要 RustDesk 或开启 macOS 屏幕共享
+- Claude 防直连需要 Clash Verge / Mihomo，且只能在非沙盒分发中使用；本项目不是 Mac App Store 构建
+
+### 签名与分发
+
+`build_app.sh` 沿用本机 `Bento Local Code Signing` 自签名身份，分别签名内嵌 daemon 和主 App，并把主 App 的 designated requirement 密封给 XPC 客户端校验；构建会执行严格签名检查。当前未启用 App Sandbox、未配置 Hardened Runtime，也**没有执行公证**。
+
+对外分发时应改用 Developer ID，在同一团队/签名体系下签 App 与 daemon，按分发策略启用 Hardened Runtime，并用 `notarytool` 公证及 stapler 附票；不要轮换本机现有自签名身份，否则既有辅助功能和输入监控授权会失效。
 
 ---
 
@@ -134,6 +162,13 @@ If enabled later, it targets macOS 27 and chooses preference-dictionary updates 
 - Cannot prevent clamshell sleep (no kext-free mechanism exists on Apple Silicon); the settings window says so
 - Requires no extra permissions
 
+#### 6. Claude proxy guard
+
+- An embedded root LaunchDaemon checks the actual Mihomo core, TUN configuration/address/route, controller and final proxy rules every second. Failures fail closed with managed IPv4/IPv6 hosts entries; readiness removes them automatically.
+- Changes are atomic and idempotent, with DNS flushed only after actual hosts changes. Five suffix rules live in a marked Clash Verge Merge section; subscriptions and other entries are not overwritten.
+- The daemon survives App exit and reboot. Disabling or “恢复 hosts 并卸载守护…” cleans managed rules and unregisters it. First use may require approval under Login Items & Extensions → Allow in Background.
+- Hosts cannot cover wildcard/dynamic subdomains such as `*.frame.claudeusercontent.com` or `*.claudemcpcontent.com`. Restart browsers or Claude Code when stale DNS results remain cached.
+
 ### Usage
 
 ```bash
@@ -158,7 +193,7 @@ open Bento.app
 
 ```bash
 ./build_app.sh --check   # Swift 类型检查 / type-check
-./build_app.sh --test    # 8 组自动回归 / 8 regression suites
+./build_app.sh --test    # 9 组自动回归 / 9 regression suites
 ./build_app.sh --relaunch
 ```
 

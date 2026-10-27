@@ -159,6 +159,9 @@ if [ "${1:-}" = "--check" ]; then
     swiftc "$SCRIPT_DIR"/Sources/*.swift \
         -typecheck \
         -target arm64-apple-macosx14.0
+    swiftc "$SCRIPT_DIR/Sources/ClaudeGuardProtocol.swift" "$SCRIPT_DIR"/ClaudeGuard/*.swift \
+        -typecheck \
+        -target arm64-apple-macosx14.0
     echo "OK"
     exit 0
 fi
@@ -167,7 +170,7 @@ fi
 mkdir -p "$SCRIPT_DIR/.build"
 clang -std=c11 -Wall -Wextra -Werror -target arm64-apple-macosx14.0 \
     -c "$SCRIPT_DIR/Sources/CrashSignal.c" -o "$SCRIPT_DIR/.build/CrashSignal_arm64.o"
-echo "Compiling $APP_NAME (arm64)..."
+echo "Compiling $APP_NAME and ClaudeGuard (arm64)..."
 swiftc "$SCRIPT_DIR"/Sources/*.swift "$SCRIPT_DIR/.build/CrashSignal_arm64.o" \
     -O \
     -o "$SCRIPT_DIR/${APP_NAME}_arm64" \
@@ -175,6 +178,10 @@ swiftc "$SCRIPT_DIR"/Sources/*.swift "$SCRIPT_DIR/.build/CrashSignal_arm64.o" \
     -framework AppKit \
     -framework CoreGraphics \
     -framework IOKit
+swiftc "$SCRIPT_DIR/Sources/ClaudeGuardProtocol.swift" "$SCRIPT_DIR"/ClaudeGuard/*.swift \
+    -O \
+    -o "$SCRIPT_DIR/ClaudeGuard_arm64" \
+    -target arm64-apple-macosx14.0
 if [ "${BUILD_UNIVERSAL:-0}" = "1" ]; then
     clang -std=c11 -Wall -Wextra -Werror -target x86_64-apple-macosx14.0 \
         -c "$SCRIPT_DIR/Sources/CrashSignal.c" -o "$SCRIPT_DIR/.build/CrashSignal_x86_64.o"
@@ -186,21 +193,56 @@ if [ "${BUILD_UNIVERSAL:-0}" = "1" ]; then
         -framework AppKit \
         -framework CoreGraphics \
         -framework IOKit
+    swiftc "$SCRIPT_DIR/Sources/ClaudeGuardProtocol.swift" "$SCRIPT_DIR"/ClaudeGuard/*.swift \
+        -O \
+        -o "$SCRIPT_DIR/ClaudeGuard_x86_64" \
+        -target x86_64-apple-macosx14.0
     lipo -create \
         "$SCRIPT_DIR/${APP_NAME}_arm64" \
         "$SCRIPT_DIR/${APP_NAME}_x86_64" \
         -output "$SCRIPT_DIR/$APP_NAME"
-    rm "$SCRIPT_DIR/${APP_NAME}_arm64" "$SCRIPT_DIR/${APP_NAME}_x86_64"
+    lipo -create \
+        "$SCRIPT_DIR/ClaudeGuard_arm64" \
+        "$SCRIPT_DIR/ClaudeGuard_x86_64" \
+        -output "$SCRIPT_DIR/ClaudeGuardDaemon"
+    rm "$SCRIPT_DIR/${APP_NAME}_arm64" "$SCRIPT_DIR/${APP_NAME}_x86_64" \
+        "$SCRIPT_DIR/ClaudeGuard_arm64" "$SCRIPT_DIR/ClaudeGuard_x86_64"
 else
     mv "$SCRIPT_DIR/${APP_NAME}_arm64" "$SCRIPT_DIR/$APP_NAME"
+    mv "$SCRIPT_DIR/ClaudeGuard_arm64" "$SCRIPT_DIR/ClaudeGuardDaemon"
 fi
 
 echo "Creating app bundle..."
 rm -rf "$APP_BUNDLE"
-mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
+mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources" \
+    "$APP_BUNDLE/Contents/Library/LaunchDaemons"
 
 mv "$SCRIPT_DIR/$APP_NAME" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
+mv "$SCRIPT_DIR/ClaudeGuardDaemon" "$APP_BUNDLE/Contents/Library/LaunchDaemons/ClaudeGuard"
 cp "$SCRIPT_DIR/Assets/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
+cat > "$APP_BUNDLE/Contents/Library/LaunchDaemons/com.sz.bento.claudeguard.plist" << 'DAEMON_PLIST_EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.sz.bento.claudeguard</string>
+    <key>BundleProgram</key>
+    <string>Contents/Library/LaunchDaemons/ClaudeGuard</string>
+    <key>MachServices</key>
+    <dict>
+        <key>com.sz.bento.claudeguard</key>
+        <true/>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
+DAEMON_PLIST_EOF
 
 cat > "$APP_BUNDLE/Contents/Info.plist" << 'PLIST_EOF'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -247,10 +289,29 @@ ensure_local_codesign_identity
 codesign \
     --force \
     --sign "$LOCAL_CODESIGN_NAME" \
+    --identifier "$BUNDLE_ID.claudeguard" \
+    "$APP_BUNDLE/Contents/Library/LaunchDaemons/ClaudeGuard"
+codesign \
+    --force \
+    --sign "$LOCAL_CODESIGN_NAME" \
+    --identifier "$BUNDLE_ID" \
+    "$APP_BUNDLE"
+# daemon 不信任进程名：从主 App 的 designated requirement 生成客户端校验要求，
+# 再随最终 App 签名密封。自签名续用同一身份，避免既有 TCC 授权失效。
+REQUIREMENTS="$(codesign -d -r- "$APP_BUNDLE" 2>&1)"
+CLIENT_REQUIREMENT="${REQUIREMENTS#*designated => }"
+if [ "$CLIENT_REQUIREMENT" = "$REQUIREMENTS" ] || [ -z "$CLIENT_REQUIREMENT" ]; then
+    echo "error: 无法提取主 App 的签名要求" >&2
+    exit 1
+fi
+printf '%s\n' "$CLIENT_REQUIREMENT" > "$APP_BUNDLE/Contents/Library/LaunchDaemons/ClaudeGuardClient.requirement"
+codesign \
+    --force \
+    --sign "$LOCAL_CODESIGN_NAME" \
     --identifier "$BUNDLE_ID" \
     "$APP_BUNDLE"
 # 签完立刻验：TCC 授权按签名要求绑定，坏签名的产物跑起来会静默丢掉全部权限
-codesign --verify --strict "$APP_BUNDLE"
+codesign --verify --strict --deep "$APP_BUNDLE"
 
 echo "Done: $APP_BUNDLE"
 echo "Run: open $APP_BUNDLE"

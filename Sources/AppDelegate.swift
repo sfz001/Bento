@@ -29,6 +29,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var tilingPermissionItem: NSMenuItem!
     private var tilingPermissionMissing = false
     private var autoLaunchItem: NSMenuItem!
+    private lazy var claudeGuard = ClaudeGuardController()
+    private var claudeGuardItem: NSMenuItem!
+    private var claudeGuardStatusItem: NSMenuItem!
     // 菜单栏图标管理
     private lazy var iconMgr = MenuBarIconManager()
     // 防止睡眠
@@ -67,6 +70,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         startTiling()
         iconMgr.start()
         sleepGuard.onStateChange = { [weak self] in self?.refreshSleepGuardState() }
+        claudeGuard.onUpdate = { [weak self] in self?.refreshClaudeGuard() }
+        claudeGuard.start()
         // 远程会话中热插显示器：新屏是正常 gamma、不在镜像组，会直接亮出真实桌面。
         // 拓扑一变就重新镜像（快照有「不覆盖」规则，不会污染断开时的还原目标；
         // 快照里没有新屏的条目，恢复时它会被正确地拆出镜像）并对全部在线屏重压 gamma
@@ -94,6 +99,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         stopPollTimer()
         cancelRehearsal()
+        claudeGuard.stop()
         iconMgr.stop()
         tiling.stop()
         scrollReverser.stop()
@@ -196,6 +202,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusMenu.addItem(.sectionHeader(title: "防止睡眠"))
 
         installSleepGuardItems()
+
+        statusMenu.addItem(.sectionHeader(title: "Claude 防直连"))
+        claudeGuardStatusItem = NSMenuItem(title: "Claude 防护已关闭", action: nil, keyEquivalent: "")
+        claudeGuardStatusItem.isEnabled = false
+        statusMenu.addItem(claudeGuardStatusItem)
+        claudeGuardItem = makeItem("Claude 防直连保护", symbol: "shield.lefthalf.filled", action: #selector(toggleClaudeGuard))
+        statusMenu.addItem(claudeGuardItem)
+        statusMenu.addItem(makeItem("防护说明与排错…", symbol: "questionmark.circle", action: #selector(openClaudeGuardHelp)))
+        statusMenu.addItem(makeItem("恢复 hosts 并卸载守护…", symbol: "trash", action: #selector(cleanUpClaudeGuard)))
+        refreshClaudeGuard()
 
         // 图标管理已停用（MenuBarIconManager.featureEnabled = false），菜单入口一并隐藏；
         // 恢复功能时把开关改回 true，这一段就会回来
@@ -811,6 +827,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openIconManager() {
         iconMgr.openManagerWindow()
+    }
+
+    @objc private func toggleClaudeGuard() {
+        claudeGuard.setEnabled(!claudeGuard.snapshot.enabled)
+    }
+
+    @objc private func openClaudeGuardHelp() {
+        ClaudeGuardHelpWindow.shared.show()
+    }
+
+    @objc private func cleanUpClaudeGuard() {
+        let alert = NSAlert()
+        alert.messageText = "恢复 hosts 并卸载 Claude 防护守护？"
+        alert.informativeText = "将移除 Bento 添加的 hosts 阻断和 Clash Merge 规则，然后注销后台守护。其他 hosts、Clash 和 Claude 数据不会删除。"
+        alert.addButton(withTitle: "清理并卸载")
+        alert.addButton(withTitle: "取消")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        claudeGuard.cleanupAndUnregister()
+    }
+
+    private func refreshClaudeGuard() {
+        claudeGuardStatusItem?.title = claudeGuard.statusText
+        claudeGuardItem?.state = claudeGuard.menuState
+        claudeGuardItem?.isEnabled = !claudeGuard.operationInFlight
     }
 
     /// 菜单里的开机自启行随 SMAppService 实际状态走。requiresApproval 单独呈现：
