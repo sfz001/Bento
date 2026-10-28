@@ -6,6 +6,11 @@ APP_NAME="Bento"
 BUNDLE_ID="com.sz.bento"
 APP_BUNDLE="$SCRIPT_DIR/$APP_NAME.app"
 LOCAL_CODESIGN_NAME="Bento Local Code Signing"
+CODESIGN_NAME="${BENTO_CODESIGN_IDENTITY:-$LOCAL_CODESIGN_NAME}"
+CODESIGN_OPTIONS=()
+if [ "$CODESIGN_NAME" != "$LOCAL_CODESIGN_NAME" ] || [ "${BENTO_HARDENED_RUNTIME:-0}" = "1" ]; then
+    CODESIGN_OPTIONS=(--options runtime)
+fi
 LOCAL_CODESIGN_DIR="$SCRIPT_DIR/.bento-codesign"
 LOCAL_CODESIGN_KEYCHAIN="$HOME/Library/Keychains/BentoLocalCodeSigning.keychain-db"
 LOCAL_CODESIGN_PASSWORD_FILE="$LOCAL_CODESIGN_DIR/keychain-password"
@@ -285,15 +290,24 @@ fi
 /usr/libexec/PlistBuddy -c "Add :BentoBuildCommit string $BUILD_COMMIT" "$APP_BUNDLE/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :BentoBuildTime string $(date -u +%Y-%m-%dT%H:%M:%SZ)" "$APP_BUNDLE/Contents/Info.plist"
 
-ensure_local_codesign_identity
+if [ "$CODESIGN_NAME" = "$LOCAL_CODESIGN_NAME" ]; then
+    ensure_local_codesign_identity
+else
+    security find-identity -v -p codesigning | grep -F "$CODESIGN_NAME" >/dev/null || {
+        echo "error: 找不到可用签名身份或私钥: $CODESIGN_NAME" >&2
+        exit 1
+    }
+fi
 codesign \
     --force \
-    --sign "$LOCAL_CODESIGN_NAME" \
+    --sign "$CODESIGN_NAME" \
+    "${CODESIGN_OPTIONS[@]}" \
     --identifier "$BUNDLE_ID.claudeguard" \
     "$APP_BUNDLE/Contents/Library/LaunchDaemons/ClaudeGuard"
 codesign \
     --force \
-    --sign "$LOCAL_CODESIGN_NAME" \
+    --sign "$CODESIGN_NAME" \
+    "${CODESIGN_OPTIONS[@]}" \
     --identifier "$BUNDLE_ID" \
     "$APP_BUNDLE"
 # daemon 不信任进程名：从主 App 的 designated requirement 生成客户端校验要求，
@@ -307,7 +321,8 @@ fi
 printf '%s\n' "$CLIENT_REQUIREMENT" > "$APP_BUNDLE/Contents/Library/LaunchDaemons/ClaudeGuardClient.requirement"
 codesign \
     --force \
-    --sign "$LOCAL_CODESIGN_NAME" \
+    --sign "$CODESIGN_NAME" \
+    "${CODESIGN_OPTIONS[@]}" \
     --identifier "$BUNDLE_ID" \
     "$APP_BUNDLE"
 # 签完立刻验：TCC 授权按签名要求绑定，坏签名的产物跑起来会静默丢掉全部权限

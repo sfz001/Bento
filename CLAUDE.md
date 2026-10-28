@@ -19,7 +19,7 @@ The project began as `RustDeskScreenOff` (remote screen-off only) before growing
 ```bash
 ./build_app.sh             # Compile arm64, package .app bundle (icon from Assets/AppIcon.icns)
 ./build_app.sh --check     # Seconds-fast typecheck only — no binary, no bundle
-./build_app.sh --test      # Nine regression suites; no physical display or Dock changes
+./build_app.sh --test      # Regression suites; no physical display or Dock changes
 BUILD_UNIVERSAL=1 ./build_app.sh   # arm64 + x86_64 universal binary
 open Bento.app             # Run
 ./build_app.sh --relaunch  # Build, then quit the running instance (SIGTERM → graceful terminate) and open the new bundle
@@ -40,7 +40,7 @@ Code lives in `Sources/`, one file per module, compiled together by `build_app.s
 - `Sources/CrashSignal.c`, `Sources/CrashLogging.swift` — async-signal-safe fatal markers and installation
 - `Sources/main.swift` — single-instance guard, exception/signal logging, build metadata, NSApplication bootstrap
 - `Sources/ClaudeGuardProtocol.swift`, `Sources/ClaudeGuardController.swift` — fixed XPC surface, daemon registration/status and Chinese menu/help UI. The daemon build also compiles the protocol but has its own entry point.
-- `ClaudeGuard/main.swift`, `ClaudeGuardDaemon.swift` — separate daemon entry, one-second serial loop, persistent enabled state, and per-call audit-token + designated-requirement validation. `ClaudeGuardHosts.swift` owns the 22 built-in domains and locked/atomic managed-section writes; `ClaudeGuardEngine.swift` emits DNS flushes only on actual hosts changes. `ClashProbe.swift` requires core identity, active config, declared interface address, actual route and controller/rules evidence. `ClashMerge.swift` only edits marked persistent Merge sections. Do not put daemon top-level code under `Sources/`, where the App wildcard would compile it.
+- `ClaudeGuard/main.swift`, `ClaudeGuardDaemon.swift` — separate daemon entry, one-second serial loop, persistent enabled state, and Foundation-enforced per-message code-signing requirements (macOS 13+, configured before connection resume). The daemon derives the App requirement from its own signed designated requirement, preserving the certificate/Team constraints and replacing only the exact daemon identifier; the packaged `.requirement` is diagnostic only. `ClaudeGuardHosts.swift` owns the 22 built-in domains and locked/atomic managed-section writes; `ClaudeGuardEngine.swift` emits DNS flushes only on actual hosts changes. `ClashProbe.swift` requires core identity, kernel-read argv (paths may contain spaces), active config, declared interface address, actual route and controller/rules evidence. `ClashMerge.swift` only edits marked persistent Merge sections. Do not put daemon top-level code under `Sources/`, where the App wildcard would compile it.
 
 File-scope `private`/`fileprivate` declarations don't cross these file boundaries — anything shared between modules belongs in `Support.swift` as internal.
 
@@ -114,7 +114,7 @@ File-scope `private`/`fileprivate` declarations don't cross these file boundarie
 - Bundle ID: `com.sz.bento`
 - Login start is owned by `SMAppService.mainApp` (menu toggle surfaces `.requiresApproval` as a distinct "待系统设置批准" state that deep-links to Login Items); the legacy LaunchAgent plist `~/Library/LaunchAgents/com.sz.bento.plist` is unloaded and deleted by a one-time migration on launch
 - Code signing (`build_app.sh`): self-signed identity in a dedicated keychain; the keychain password is random, stored only in gitignored `.bento-codesign/keychain-password` (0600) — a legacy hardcoded password lives in public git history, so old keychains are migrated in place via `set-keychain-password` (cert unchanged → TCC grants survive). Private key/p12 are deleted from disk after import (an EXIT trap covers failed runs). If the keychain exists but the identity can't be found, the script REFUSES to rebuild (that would rotate the cert and void Accessibility/Input Monitoring grants) unless `BENTO_REBUILD_CODESIGN=1`
-- **Claude daemon signing boundary (verified macOS 27.2)**: background-item approval succeeds with the local certificate, but AMFI rejects the self-signed root daemon with a launch-constraint violation. `claudeGuardSigningError` requires a signing team before registration; local builds fail closed with a Chinese Developer ID message instead of entering a launchd crash loop. Developer ID-signed App + daemon can use the same implementation. `--claude-guard unregister` is the emergency registration-only removal command and deliberately does not claim to clean hosts; ordinary cleanup remains `off`.
+- **Claude daemon signing boundary (verified macOS 27.2)**: background-item approval succeeds with the local certificate, but AMFI rejects the self-signed root daemon with a launch-constraint violation. `claudeGuardSigningError` requires a signing team before registration; local builds fail closed with a Chinese Developer ID message instead of entering a launchd crash loop. Build both App and daemon with `BENTO_CODESIGN_IDENTITY="Developer ID Application: Shifeng Zhao (RV3FMJ29RW)" ./build_app.sh`; Developer ID builds also require Hardened Runtime (`--options runtime`) for the root daemon to run. The preflight must request `kSecCSSigningInformation` to obtain Team ID. `--claude-guard unregister` is the emergency registration-only removal command and deliberately does not claim to clean hosts; ordinary cleanup remains `off`. For validation/maintenance, `off --keep-registered` cleans the managed sections without revoking background-item approval. Do not unregister/register on every App build change; use `Bento.app/Contents/MacOS/Bento --claude-guard restart` to request a fixed, authenticated self-restart while preserving approval. It blocks hosts first when enabled, then exits for launchd KeepAlive; verify a new PID and a successful status call. An older daemon that predates this command needs a one-time administrator `launchctl kickstart -k system/com.sz.bento.claudeguard`.
 
 ## 审计修复后的显示恢复顺序
 
@@ -126,7 +126,7 @@ File-scope `private`/`fileprivate` declarations don't cross these file boundarie
 
 ## 当前测试与操作边界
 
-- `./build_app.sh --test` 顺序执行 9 组测试，详见 `Tests/README.md`。AppDelegate 测试直接使用生产会话代码并注入显示控制器、锁定查询；不安装状态菜单或 event tap，不触发真实黑屏/锁屏。布局树、手势、图标状态、日志限速分离为不依赖 AppKit 的模型。
+- `./build_app.sh --test` 顺序执行回归测试，详见 `Tests/README.md`。AppDelegate 测试直接使用生产会话代码并注入显示控制器、锁定查询；不安装状态菜单或 event tap，不触发真实黑屏/锁屏。布局树、手势、图标状态、日志限速分离为不依赖 AppKit 的模型。
 - 菜单「熄屏流程演练…」仅在监控开启且无会话时可开始，用户确认后走真实连接处理与锁定恢复，10 秒自动收尾；真实连接取消演练计时并接管。不要为了自动测试而调用真实硬件演练。
 - 等待锁定期间保留 sessionPrepared，实际恢复开始才清除，保证重连后的热插/唤醒保护；pendingRestore 存在时不重复启动断开收尾。
 - 滚动自愈调用 start(promptForPermissions: false)，只有启动和用户手动重试可请求授权。权限界面与用途说明为中文。

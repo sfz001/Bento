@@ -36,7 +36,7 @@ struct ClashConfiguration {
 
 enum ClashProbeError: LocalizedError {
     case coreNotFound, invalidCore, unreadableConfiguration, tunDisabled, deviceUnavailable, routeUnavailable
-    case controllerUnavailable, rulesUnavailable, rulesNotProxy
+    case controllerUnavailable, ruleModeRequired, rulesUnavailable, rulesNotProxy, proxySelectionUnsafe
     var errorDescription: String? {
         switch self {
         case .coreNotFound: return "未找到正在运行的 Clash Verge 核心"
@@ -46,8 +46,10 @@ enum ClashProbeError: LocalizedError {
         case .deviceUnavailable: return "Clash 声明的 TUN 设备没有有效地址"
         case .routeUnavailable: return "默认流量路由未经过 Clash 的 TUN 设备"
         case .controllerUnavailable: return "Clash 控制接口不可用"
+        case .ruleModeRequired: return "Clash 未处于可验证的规则模式，Claude 保持阻断"
         case .rulesUnavailable: return "无法验证 Clash 的最终运行规则"
         case .rulesNotProxy: return "Claude 规则未生效或未指向代理组，请检查 Merge 和脚本"
+        case .proxySelectionUnsafe: return "Claude 代理组未选中可验证的代理节点（可能选中了 DIRECT）"
         }
     }
 }
@@ -55,25 +57,26 @@ enum ClashProbeError: LocalizedError {
 final class ClashProbe {
     typealias Runner = (String, [String], TimeInterval) -> (status: Int32, output: String)
     private let run: Runner, executablePath: (pid_t) -> String?, readFile: (String) throws -> String
+    private let processArguments: (pid_t) -> [String]?
     private let activeInterface: (String) -> Bool
     private let request: (ClashConfiguration, String?, String) throws -> String
-    init(run: @escaping Runner = { claudeGuardRunProcess($0, $1, timeout: $2) },
+    init(run: @escaping Runner = { claudeGuardRunProcess($0, $1, timeout: $2, captureStandardError: $0 == "/sbin/route") },
          executablePath: @escaping (pid_t) -> String? = ClashProbe.kernelExecutablePath,
+         processArguments: @escaping (pid_t) -> [String]? = ClashProbe.kernelArguments,
          readFile: @escaping (String) throws -> String = { try String(contentsOfFile: $0, encoding: .utf8) },
          activeInterface: @escaping (String) -> Bool = ClashProbe.interfaceHasAddress,
          request: @escaping (ClashConfiguration, String?, String) throws -> String = ClashProbe.controllerRequest) {
-        self.run = run; self.executablePath = executablePath; self.readFile = readFile
+        self.run = run; self.executablePath = executablePath; self.processArguments = processArguments; self.readFile = readFile
         self.activeInterface = activeInterface; self.request = request
     }
     func core() throws -> ClashCore {
-        let result = run("/bin/ps", ["-axo", "pid=,command="], 2)
+        let result = run("/bin/ps", ["-axo", "pid="], 2)
         guard result.status == 0 else { throw ClashProbeError.invalidCore }
         let names: Set<String> = ["mihomo", "verge-mihomo", "verge-mihomo-alpha"]
         for line in result.output.components(separatedBy: .newlines) {
-            let parts = line.trimmingCharacters(in: .whitespaces).split(separator: " ", maxSplits: 1).map(String.init)
-            guard parts.count == 2, let pid = Int32(parts[0]), let path = executablePath(pid),
+            guard let pid = Int32(line.trimmingCharacters(in: .whitespaces)), let path = executablePath(pid),
                   names.contains(URL(fileURLWithPath: path).lastPathComponent) else { continue }
-            let arguments = parts[1].split(separator: " ").map(String.init)
+            guard let arguments = processArguments(pid) else { throw ClashProbeError.invalidCore }
             guard let configIndex = arguments.firstIndex(of: "-f"), arguments.indices.contains(configIndex + 1) else { throw ClashProbeError.invalidCore }
             let socketIndex = arguments.firstIndex(of: "-ext-ctl-unix")
             let socket = socketIndex.flatMap { arguments.indices.contains($0 + 1) ? arguments[$0 + 1] : nil }
@@ -88,26 +91,99 @@ final class ClashProbe {
         let route = run("/sbin/route", ["-n", "get", "-inet", "1.1.1.1"], 2)
         guard route.status == 0, route.output.components(separatedBy: .newlines).contains(where: {
             $0.trimmingCharacters(in: .whitespaces) == "interface: \(configuration.device)" }) else { throw ClashProbeError.routeUnavailable }
+        let ipv6Route = run("/sbin/route", ["-n", "get", "-inet6", "2606:4700:4700::1111"], 2)
+        let ipv6Lines = ipv6Route.output.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }
+        // route(8) reports ESRCH with this exact diagnostic, sometimes with exit 0.
+        // Only an explicit absent route is safe; permission errors/timeouts are unknown.
+        let noIPv6Route = [0, 1].contains(ipv6Route.status)
+            && ipv6Lines.contains("route: writing to routing socket: not in table")
+        guard noIPv6Route || (ipv6Route.status == 0 && ipv6Lines.contains("interface: \(configuration.device)")) else {
+            throw ClashProbeError.routeUnavailable
+        }
         let version = try request(configuration, core.commandSocket, "/version")
         guard let data = version.data(using: .utf8), let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               object["meta"] as? Bool == true else { throw ClashProbeError.controllerUnavailable }
+        // The listed rules are bypassed in direct/global mode. Read the live
+        // controller state because changing modes need not rewrite the YAML.
+        let configs = try request(configuration, core.commandSocket, "/configs")
+        guard let data = configs.data(using: .utf8), let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object["mode"] as? String == "rule" else { throw ClashProbeError.ruleModeRequired }
         let rules = try request(configuration, core.commandSocket, "/rules")
         guard Self.rulesRouteToProxy(rules, groups: configuration.proxyGroups) else { throw ClashProbeError.rulesNotProxy }
+        let proxies = try request(configuration, core.commandSocket, "/proxies")
+        guard let group = Self.proxyGroup(configuration.proxyGroups), Self.selectedProxyIsSafe(proxies, group: group) else {
+            throw ClashProbeError.proxySelectionUnsafe
+        }
     }
     func preferredProxyGroup() throws -> String {
         let core = try core(), groups = ClashConfiguration.parse(try readFile(core.configPath)).proxyGroups
-        if groups.contains("PROXY") { return "PROXY" }
-        let candidates = groups.filter { $0 != "DIRECT" && $0 != "REJECT" && !$0.isEmpty }
-        return candidates.count == 1 ? candidates[0] : "PROXY"
+        guard let group = Self.proxyGroup(groups) else { throw ClashProbeError.rulesNotProxy }
+        return group
     }
     static func rulesRouteToProxy(_ json: String, groups: [String]) -> Bool {
         guard let data = json.data(using: .utf8), let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let rules = object["rules"] as? [[String: Any]] else { return false }
-        let expected = ["claude.ai", "claude.com", "claudeusercontent.com", "claudemcpcontent.com", "anthropic.com"]
-        let proxy = groups.contains("PROXY") ? "PROXY" : groups.first { $0 != "DIRECT" && $0 != "REJECT" }
-        guard let proxy, !proxy.isEmpty else { return false }
-        return expected.allSatisfy { domain in rules.contains {
-            ($0["type"] as? String) == "DomainSuffix" && ($0["payload"] as? String) == domain && ($0["proxy"] as? String) == proxy } }
+        let expected = Set(claudeProxyRuleDomains)
+        guard let proxy = proxyGroup(groups), rules.count >= expected.count else { return false }
+        // Managed prepend-rules must really take precedence over DIRECT/MATCH and scripts.
+        let prefix = rules.prefix(expected.count)
+        return Set(prefix.compactMap { $0["payload"] as? String }) == expected && prefix.allSatisfy {
+            ($0["type"] as? String) == "DomainSuffix" && ($0["proxy"] as? String) == proxy
+        }
+    }
+    private static func proxyGroup(_ groups: [String]) -> String? {
+        if groups.contains("PROXY") { return "PROXY" }
+        let candidates = groups.filter { $0 != "DIRECT" && $0 != "REJECT" && !$0.isEmpty }
+        return candidates.count == 1 ? candidates[0] : nil
+    }
+    static func selectedProxyIsSafe(_ json: String, group: String) -> Bool {
+        guard let data = json.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let proxies = object["proxies"] as? [String: [String: Any]] else { return false }
+        let transports: Set<String> = ["shadowsocks", "shadowsocksr", "vmess", "vless", "trojan", "snell", "socks5", "http", "wireguard", "hysteria", "hysteria2", "tuic", "ssh", "anytls", "mieru"]
+        func safe(_ name: String, visited: Set<String>) -> Bool {
+            guard !visited.contains(name), visited.count < 32,
+                  let entry = proxies[name], let type = (entry["type"] as? String)?.lowercased() else { return false }
+            if type == "direct" || type == "reject" || type == "rejectdrop" || type == "compatible" || type == "pass" { return false }
+            let nextVisited = visited.union([name])
+            if ["selector", "urltest", "fallback"].contains(type) {
+                guard let selected = entry["now"] as? String, !selected.isEmpty else { return false }
+                return safe(selected, visited: nextVisited)
+            }
+            if ["loadbalance", "relay"].contains(type) {
+                guard let members = entry["all"] as? [String], !members.isEmpty else { return false }
+                return members.allSatisfy { safe($0, visited: nextVisited) }
+            }
+            return transports.contains(type)
+        }
+        return safe(group, visited: [])
+    }
+    static func kernelArguments(_ pid: pid_t) -> [String]? {
+        var mib: [Int32] = [CTL_KERN, KERN_ARGMAX], maximum: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        guard sysctl(&mib, u_int(mib.count), &maximum, &size, nil, 0) == 0, maximum > 0 else { return nil }
+        var bytes = [UInt8](repeating: 0, count: Int(maximum)); size = bytes.count
+        mib = [CTL_KERN, KERN_PROCARGS2, pid]
+        guard sysctl(&mib, u_int(mib.count), &bytes, &size, nil, 0) == 0 else { return nil }
+        return parseKernelArguments(Data(bytes.prefix(size)))
+    }
+    static func parseKernelArguments(_ data: Data) -> [String]? {
+        guard data.count > MemoryLayout<Int32>.size else { return nil }
+        let bytes = [UInt8](data)
+        let count = data.withUnsafeBytes { $0.loadUnaligned(as: Int32.self) }
+        guard count > 0, count <= 16384 else { return nil }
+        var cursor = MemoryLayout<Int32>.size
+        // KERN_PROCARGS2: argc, executable path, NUL padding, then argc NUL-terminated argv strings.
+        while cursor < bytes.count && bytes[cursor] != 0 { cursor += 1 }
+        while cursor < bytes.count && bytes[cursor] == 0 { cursor += 1 }
+        var arguments: [String] = []
+        for _ in 0..<count {
+            let start = cursor
+            while cursor < bytes.count && bytes[cursor] != 0 { cursor += 1 }
+            guard cursor < bytes.count, let argument = String(bytes: bytes[start..<cursor], encoding: .utf8) else { return nil }
+            arguments.append(argument); cursor += 1
+        }
+        return arguments
     }
     private static func kernelExecutablePath(_ pid: pid_t) -> String? {
         var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))

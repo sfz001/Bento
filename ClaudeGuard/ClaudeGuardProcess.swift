@@ -2,10 +2,12 @@ import Darwin
 import Foundation
 
 @discardableResult
-func claudeGuardRunProcess(_ path: String, _ arguments: [String], timeout: TimeInterval = 2) -> (status: Int32, output: String) {
+func claudeGuardRunProcess(_ path: String, _ arguments: [String], timeout: TimeInterval = 2,
+                          captureStandardError: Bool = false) -> (status: Int32, output: String) {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: path); process.arguments = arguments
-    let output = Pipe(); process.standardOutput = output; process.standardError = FileHandle.nullDevice
+    let output = Pipe(); process.standardOutput = output
+    process.standardError = captureStandardError ? output : FileHandle.nullDevice
     do { try process.run() } catch { return (-1, "") }
     let watchdog = DispatchWorkItem { if process.isRunning { kill(process.processIdentifier, SIGKILL) } }
     DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: watchdog)

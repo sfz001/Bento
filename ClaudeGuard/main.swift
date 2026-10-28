@@ -6,12 +6,16 @@ let savedEnabled = (try? String(contentsOf: stateURL, encoding: .utf8))?.trimmin
 let engine = ClaudeGuardEngine(enabled: savedEnabled, hosts: ClaudeGuardHostsFile(), flushDNS: claudeGuardFlushDNS)
 let executableURL = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
 let requirementURL = executableURL.deletingLastPathComponent().appendingPathComponent("ClaudeGuardClient.requirement")
-let requirement = (try? String(contentsOf: requirementURL, encoding: .utf8))?
-    .trimmingCharacters(in: .whitespacesAndNewlines) ?? "identifier \"invalid.missing.bento.requirement\""
-let service = ClaudeGuardService(engine: engine, probe: ClashProbe(), merge: ClashMergeManager(), stateURL: stateURL,
-                                 authorizer: ClaudeGuardClientAuthorizer(requirement: requirement))
+let packagedRequirement = (try? String(contentsOf: requirementURL, encoding: .utf8))?
+    .trimmingCharacters(in: .whitespacesAndNewlines)
+let requirement = ClaudeGuardClientAuthorizer.trustedClientRequirement()
+// This resource remains a build diagnostic; it cannot widen the root daemon's trust.
+if packagedRequirement != requirement {
+    FileHandle.standardError.write(Data("ClaudeGuard: packaged client requirement differs from daemon signing identity; using signed identity\n".utf8))
+}
+let service = ClaudeGuardService(engine: engine, probe: ClashProbe(), merge: ClashMergeManager(), stateURL: stateURL)
 let listener = NSXPCListener(machServiceName: claudeGuardDaemonLabel)
-let delegate = ClaudeGuardListener(service: service)
+let delegate = ClaudeGuardListener(service: service, authorizer: ClaudeGuardClientAuthorizer(requirement: requirement))
 listener.delegate = delegate
 listener.resume()
 service.start()

@@ -8,6 +8,8 @@ final class ClaudeGuardController {
     private(set) var operationInFlight = false
     private var connection: NSXPCConnection?
     private var timer: Timer?
+    // A successful status poll must not erase a failed user operation.
+    private var operationError: String?
     private let service = SMAppService.daemon(plistName: claudeGuardDaemonPlist)
     private var registrationStatus = SMAppService.Status.notRegistered
 
@@ -25,14 +27,13 @@ final class ClaudeGuardController {
             break
         }
         if let error = snapshot.configurationError, !error.isEmpty {
-            return "Claude 防护：配置错误（查看说明与排错）"
+            return "Claude 防护：\(error)"
         }
         if !snapshot.enabled { return "Claude 防护已关闭" }
         return snapshot.ready ? "Clash/TUN 已就绪，Claude 通过代理访问" : "Clash/TUN 未就绪，Claude 已阻断"
     }
 
     func start() {
-        reconcileDaemonUpgrade()
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.refresh() }
     }
@@ -44,7 +45,9 @@ final class ClaudeGuardController {
 
     func setEnabled(_ enabled: Bool) {
         guard !operationInFlight else { return }
+        operationError = nil
         if enabled, let signingError = claudeGuardSigningError {
+            operationError = signingError
             snapshot = ClaudeGuardSnapshot(["enabled": false, "ready": false, "error": signingError])
             onUpdate?()
             return
@@ -53,19 +56,21 @@ final class ClaudeGuardController {
         onUpdate?()
         DispatchQueue.main.async {
             do {
-                if self.service.status != .enabled { try self.service.register() }
+                if enabled, self.service.status != .enabled { try self.service.register() }
                 guard self.service.status == .enabled else {
-                    self.finish(nil)
-                    SMAppService.openSystemSettingsLoginItems()
+                    self.finish(enabled ? nil : "守护进程未运行，未执行清理")
+                    if self.service.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
                     return
                 }
                 self.remote { proxy, failure in
                     proxy?.setEnabled(enabled) { error in
-                        if let error { failure(error as String); return }
-                        if !enabled {
-                            do { try self.service.unregister() } catch { failure(error.localizedDescription); return }
+                        DispatchQueue.main.async {
+                            if let error { failure(error as String); return }
+                            if !enabled {
+                                do { try self.service.unregister() } catch { failure(error.localizedDescription); return }
+                            }
+                            self.finish(nil)
                         }
-                        self.finish(nil)
                     } ?? failure("无法连接 Claude 防护守护进程")
                 }
             } catch {
@@ -80,14 +85,18 @@ final class ClaudeGuardController {
     func refresh() {
         registrationStatus = service.status
         guard registrationStatus == .enabled else {
-            snapshot = ClaudeGuardSnapshot(["enabled": false, "ready": false])
+            var status: [String: Any] = ["enabled": false, "ready": false]
+            status["error"] = operationError ?? snapshot.configurationError
+            snapshot = ClaudeGuardSnapshot(status as NSDictionary)
             onUpdate?()
             return
         }
         remote { proxy, failure in
             proxy?.getStatus { dictionary in
                 DispatchQueue.main.async {
-                    self.snapshot = ClaudeGuardSnapshot(dictionary)
+                    let status = dictionary.mutableCopy() as! NSMutableDictionary
+                    if let error = self.operationError { status["error"] = error }
+                    self.snapshot = ClaudeGuardSnapshot(status)
                     self.onUpdate?()
                 }
             } ?? failure("无法读取 Claude 防护状态")
@@ -101,6 +110,9 @@ final class ClaudeGuardController {
             DispatchQueue.main.async {
                 self.connection?.invalidate()
                 self.connection = nil
+                if self.operationInFlight { self.operationError = message }
+                self.operationInFlight = false
+                self.registrationStatus = self.service.status
                 self.snapshot = ClaudeGuardSnapshot(["enabled": self.snapshot.enabled, "ready": false, "error": message])
                 self.onUpdate?()
             }
@@ -108,8 +120,14 @@ final class ClaudeGuardController {
         if connection == nil {
             let newConnection = NSXPCConnection(machServiceName: claudeGuardDaemonLabel, options: .privileged)
             newConnection.remoteObjectInterface = NSXPCInterface(with: ClaudeGuardXPCProtocol.self)
-            newConnection.invalidationHandler = { [weak self] in self?.connection = nil }
-            newConnection.interruptionHandler = { [weak self] in self?.connection = nil }
+            let disconnected: () -> Void = { [weak self, weak newConnection] in
+                DispatchQueue.main.async {
+                    guard let self, self.connection === newConnection else { return }
+                    self.connection = nil
+                }
+            }
+            newConnection.invalidationHandler = disconnected
+            newConnection.interruptionHandler = disconnected
             newConnection.resume()
             connection = newConnection
         }
@@ -120,25 +138,17 @@ final class ClaudeGuardController {
     private func finish(_ error: String?) {
         DispatchQueue.main.async {
             self.operationInFlight = false
-            if let error { self.snapshot = ClaudeGuardSnapshot(["enabled": self.snapshot.enabled, "ready": false, "error": error]) }
-            self.refresh()
+            self.registrationStatus = self.service.status
+            self.operationError = error
+            if let error {
+                self.snapshot = ClaudeGuardSnapshot(["enabled": self.snapshot.enabled, "ready": false, "error": error])
+            } else {
+                self.refresh()
+            }
             self.onUpdate?()
         }
     }
 
-    private func reconcileDaemonUpgrade() {
-        guard service.status == .enabled else { return }
-        let build = Bundle.main.object(forInfoDictionaryKey: "BentoBuildCommit") as? String ?? "unknown"
-        let key = "ClaudeGuardDaemonBuild"
-        guard UserDefaults.standard.string(forKey: key) != build else { return }
-        do {
-            try service.unregister()
-            try service.register()
-            UserDefaults.standard.set(build, forKey: key)
-        } catch {
-            ErrorLog.log("Claude 防护守护升级失败: \(error.localizedDescription)")
-        }
-    }
 }
 
 final class ClaudeGuardHelpWindow: NSWindowController {
