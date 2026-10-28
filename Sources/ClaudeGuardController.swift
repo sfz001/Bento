@@ -30,6 +30,9 @@ final class ClaudeGuardController {
             return "Claude 防护：\(error)"
         }
         if !snapshot.enabled { return "Claude 防护已关闭" }
+        if !snapshot.ready, let detail = snapshot.detectionDetail, !detail.isEmpty {
+            return "Claude 已阻断：\(detail)"
+        }
         return snapshot.ready ? "Clash/TUN 已就绪，Claude 通过代理访问" : "Clash/TUN 未就绪，Claude 已阻断"
     }
 
@@ -165,13 +168,14 @@ Claude 的 Clash 联动防直连保护
 开启后，Bento 注册一个 root LaunchDaemon。守护进程每秒核实 Clash 核心、本次 TUN 配置、TUN 地址、实际路由和控制接口。未就绪或检测失败时，将指定 Claude/Anthropic 域名指向 127.0.0.1 和 ::1；就绪后自动移除阻断。App 退出不影响守护，重启后按上次开启状态自动恢复。
 
 首次授权
-macOS 可能要求在「系统设置 → 通用 → 登录项与扩展 → 在后台允许」中允许 Bento。保护关闭会清理 hosts 和 Bento 的 Clash Merge 规则，并注销守护。「恢复 hosts 并卸载守护」执行同样的彻底清理。
+macOS 可能要求在「系统设置 → 通用 → 登录项与扩展 → 在后台允许」中允许 Bento。保护关闭会清理 hosts 和 Bento 的全局 Script 标记段，并注销守护。「恢复 hosts 并卸载守护」执行同样的彻底清理。
 
 排错
 • 确认 Clash Verge 核心运行，TUN 与自动路由均开启。
-• 五条 DOMAIN-SUFFIX 规则写入 Clash Verge 持久 Merge 的 Bento 标记段，不修改订阅。
+• 五条 DOMAIN-SUFFIX 规则由 Clash Verge 全局 Script 的 Bento 标记段加入，保留原有脚本和订阅规则。
 • 默认使用 PROXY 代理组。若运行配置不存在该组且无法唯一判断其他代理组，或后续脚本覆盖规则，保护保持阻断并显示配置错误。
-• 原有 Merge 已含 prepend-rules 时不会擅自合并；请按提示手动处理，避免破坏现有列表。
+• 首次开启或规则恢复后，需要在 Clash Verge 重新加载配置；运行态规则未通过验证前保持阻断。
+• 仅包装可安全识别的标准 function main 全局脚本；无法识别时提示配置错误，不覆盖原脚本。
 • 状态检测、hosts 或 DNS 刷新失败都按未就绪处理，不会为了放行而忽略错误。
 
 限制

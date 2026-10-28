@@ -7,18 +7,39 @@ struct ClashConfiguration {
     let unixController: String?, tcpController: String?, secret: String?, proxyGroups: [String]
     static func parse(_ yaml: String) -> ClashConfiguration {
         var section = "", values: [String: String] = [:], groups: [String] = []
+        var groupSequenceIndent: Int?
         for raw in yaml.components(separatedBy: .newlines) {
             let line = raw.trimmingCharacters(in: .whitespaces)
             if line.isEmpty || line.hasPrefix("#") { continue }
-            if !raw.hasPrefix(" ") && !raw.hasPrefix("\t") { section = raw.components(separatedBy: ":").first ?? "" }
+            let indentation = raw.prefix { $0 == " " }.count
+            let sequenceItem = line == "-" || line.hasPrefix("- ")
+            // YAML permits an indentless sequence under a top-level key. Its
+            // '- type:' line is still part of proxy-groups, not a new section.
+            if indentation == 0 && !raw.hasPrefix("\t") && !sequenceItem {
+                section = raw.components(separatedBy: ":").first ?? ""
+                groupSequenceIndent = nil
+            }
+            if section == "proxy-groups" {
+                var field: String?
+                if sequenceItem {
+                    if groupSequenceIndent == nil && [0, 2, 4].contains(indentation) { groupSequenceIndent = indentation }
+                    if indentation == groupSequenceIndent {
+                        field = String(line.dropFirst()).trimmingCharacters(in: .whitespaces)
+                    }
+                } else if let groupSequenceIndent, indentation == groupSequenceIndent + 2 {
+                    field = line // name need not be the first field of the item.
+                }
+                if let field, field.hasPrefix("name:") {
+                    groups.append(unquote(String(field.dropFirst("name:".count)).trimmingCharacters(in: .whitespaces)))
+                }
+                continue
+            }
             if section == "tun", raw.hasPrefix("  "), !raw.hasPrefix("    ") {
                 let parts = line.split(separator: ":", maxSplits: 1).map(String.init)
                 if parts.count == 2 { values[parts[0]] = unquote(parts[1].trimmingCharacters(in: .whitespaces)) }
             } else if !raw.hasPrefix(" ") {
                 let parts = line.split(separator: ":", maxSplits: 1).map(String.init)
                 if parts.count == 2 { values[parts[0]] = unquote(parts[1].trimmingCharacters(in: .whitespaces)) }
-            } else if section == "proxy-groups", raw.hasPrefix("  - name:") {
-                groups.append(unquote(String(line.dropFirst("- name:".count)).trimmingCharacters(in: .whitespaces)))
             }
         }
         return ClashConfiguration(tunEnabled: values["enable"] == "true", autoRoute: values["auto-route"] == "true",
@@ -48,7 +69,7 @@ enum ClashProbeError: LocalizedError {
         case .controllerUnavailable: return "Clash 控制接口不可用"
         case .ruleModeRequired: return "Clash 未处于可验证的规则模式，Claude 保持阻断"
         case .rulesUnavailable: return "无法验证 Clash 的最终运行规则"
-        case .rulesNotProxy: return "Claude 规则未生效或未指向代理组，请检查 Merge 和脚本"
+        case .rulesNotProxy: return "Claude 保护规则未生效或被后置配置覆盖，请重新加载 Clash 配置"
         case .proxySelectionUnsafe: return "Claude 代理组未选中可验证的代理节点（可能选中了 DIRECT）"
         }
     }

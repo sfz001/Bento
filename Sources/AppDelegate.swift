@@ -622,47 +622,55 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startScrollReverser(showAlert: Bool) {
-        // 自愈重建失败 = 功能已停摆，菜单得跟着变成"需授权 / 可重试"的样子
-        scrollReverser.onTapRebuildFailed = { [weak self] in
-            self?.setScrollPermissionMissing(true)
-        }
-        if scrollReverser.start() {
-            setScrollPermissionMissing(false)
-            return
-        }
-
-        setScrollPermissionMissing(true)
-        if showAlert {
+        scrollReverser.onStateChange = { [weak self] in self?.updateScrollStatus() }
+        if !scrollReverser.start(), showAlert {
             DispatchQueue.main.async { [weak self] in
                 self?.showScrollPermissionAlert()
             }
         }
     }
 
-    private func setScrollPermissionMissing(_ missing: Bool) {
-        scrollPermissionItem.isHidden = !missing
-        openAccessibilityItem.isHidden = !missing
-        openInputMonitoringItem.isHidden = !missing
-        retryScrollPermissionsItem.isHidden = !missing
+    private func updateScrollStatus() {
+        let failure = scrollReverser.startupFailure
+        let unavailable = failure != nil
+        scrollPermissionItem.isHidden = !unavailable
+        openAccessibilityItem.isHidden = !unavailable
+        openInputMonitoringItem.isHidden = !unavailable
+        retryScrollPermissionsItem.isHidden = !unavailable
+        scrollPermissionItem.title = failure == .eventTap
+            ? "滚动功能暂不可用（请重试，仍失败请重启 Bento）"
+            : "滚动控制授权尚未生效"
+        retryScrollPermissionsItem.title = failure == .eventTap ? "重试滚动功能" : "重新检测滚动权限"
 
-        reverseMouseItem.title = missing ? "反转鼠标滚动（需授权）" : "反转鼠标滚动"
-        reverseTrackpadItem.title = missing ? "反转触控板滚动（需授权）" : "反转触控板滚动"
-        reverseMouseItem.isEnabled = !missing
-        reverseTrackpadItem.isEnabled = !missing
+        let suffix = failure == .eventTap ? "（暂不可用）" : unavailable ? "（需授权）" : ""
+        reverseMouseItem.title = "反转鼠标滚动" + suffix
+        reverseTrackpadItem.title = "反转触控板滚动" + suffix
+        reverseMouseItem.isEnabled = !unavailable
+        reverseTrackpadItem.isEnabled = !unavailable
         reverseMouseItem.state = scrollReverser.reverseMouse ? .on : .off
         reverseTrackpadItem.state = scrollReverser.reverseTrackpad ? .on : .off
     }
 
     private func showScrollPermissionAlert() {
-        guard !hasShownScrollPermissionAlert else { return }
+        guard !hasShownScrollPermissionAlert, let failure = scrollReverser.startupFailure else { return }
         hasShownScrollPermissionAlert = true
 
         NSApp.activate(ignoringOtherApps: true)
 
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Bento 需要滚动控制权限"
-        alert.informativeText = "请在「系统设置 → 隐私与安全性」中为 Bento 开启「辅助功能」和「输入监控」，然后点击菜单中的「重新检测滚动权限」，无需退出重开。"
+        if failure == .eventTap {
+            alert.messageText = "Bento 滚动功能暂时未启动"
+            alert.informativeText = "辅助功能授权已通过，但系统未能启用滚动事件处理。Bento 会自动重试；如仍无法恢复，请完全退出并重新打开 Bento。"
+            alert.addButton(withTitle: "重试滚动功能")
+            alert.addButton(withTitle: "稍后")
+            if alert.runModal() == .alertFirstButtonReturn {
+                _ = scrollReverser.start(promptForPermissions: false)
+            }
+            return
+        }
+        alert.messageText = "Bento 的滚动控制授权尚未生效"
+        alert.informativeText = "请检查「系统设置 → 隐私与安全性 → 辅助功能」中的 Bento。Bento 会自动重新检测；如果已勾选但仍无法恢复，请完全退出并重新打开 Bento。"
         alert.addButton(withTitle: "打开辅助功能设置")
         alert.addButton(withTitle: "打开输入监控设置")
         alert.addButton(withTitle: "稍后")

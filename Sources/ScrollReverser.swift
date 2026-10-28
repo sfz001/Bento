@@ -27,6 +27,30 @@ private enum ScrollInputSource {
     case trackpad
 }
 
+enum ScrollStartupFailure: Equatable {
+    case authorization
+    case eventTap
+}
+
+struct ScrollAccessSnapshot: Equatable {
+    let accessibility: Bool
+    let postEvent: Bool
+    let listenEvent: IOHIDAccessType
+
+    static func current() -> ScrollAccessSnapshot {
+        ScrollAccessSnapshot(accessibility: AXIsProcessTrusted(),
+                             postEvent: CGPreflightPostEventAccess(),
+                             listenEvent: IOHIDCheckAccess(kIOHIDRequestTypeListenEvent))
+    }
+
+    func failure(tapEnabled: Bool) -> ScrollStartupFailure? {
+        if tapEnabled { return nil }
+        // A modifying tap uses Accessibility/PostEvent. ListenEvent is
+        // diagnostic only; a separate Input Monitoring grant is not a gate.
+        return accessibility && postEvent ? .eventTap : .authorization
+    }
+}
+
 private func nowNs() -> UInt64 {
     DispatchTime.now().uptimeNanoseconds
 }
@@ -106,6 +130,7 @@ private func scrollEventCallback(
 }
 
 class ScrollReverser {
+    typealias TapFactory = (CGEventMask, CGEventTapCallBack, UnsafeMutableRawPointer?) -> CFMachPort?
     private var activeTap: CFMachPort?
     private var activeRunLoopSource: CFRunLoopSource?
     private var touching = 0
@@ -124,13 +149,36 @@ class ScrollReverser {
         }
     }
 
-    private var selfHealingInstalled = false
     private var watchdog: Timer?
+    private var recoveryEnabled = false
+    private var observers: [NSObjectProtocol] = []
+    private let readAccess: () -> ScrollAccessSnapshot
+    private let requestAccess: () -> Void
+    private let makeTap: TapFactory
+    private let retryInterval: TimeInterval
+    private var lastAccess: ScrollAccessSnapshot?
+    private(set) var startupFailure: ScrollStartupFailure?
 
-    /// 唤醒后自愈重建失败时回调（主线程）。start() 开头会先 stop() 拆掉旧 tap，
-    /// 重建再失败就等于滚动反转彻底停摆 —— 不上报的话菜单还显示一切正常，
-    /// 用户只会觉得"某次睡醒后滚动方向莫名其妙变回去了"
-    var onTapRebuildFailed: (() -> Void)?
+    /// 启动、自动恢复的成功和失败都通知菜单（主线程），避免保留旧的失败提示。
+    var onStateChange: (() -> Void)?
+
+    init(readAccess: @escaping () -> ScrollAccessSnapshot = ScrollAccessSnapshot.current,
+         requestAccess: @escaping () -> Void = {
+             _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
+         },
+         makeTap: @escaping TapFactory = { mask, callback, userInfo in
+             CGEvent.tapCreate(tap: .cgSessionEventTap, place: .tailAppendEventTap,
+                               options: .defaultTap, eventsOfInterest: mask,
+                               callback: callback, userInfo: userInfo)
+         }, retryInterval: TimeInterval = 5) {
+        self.readAccess = readAccess; self.requestAccess = requestAccess
+        self.makeTap = makeTap; self.retryInterval = retryInterval
+    }
+
+    deinit {
+        watchdog?.invalidate()
+        for observer in observers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
+    }
 
     var reverseTrackpad: Bool {
         get { cachedReverseTrackpad }
@@ -142,28 +190,31 @@ class ScrollReverser {
 
     /// 启动与用户手动重试可提示授权；睡眠唤醒等自动恢复必须静默。
     func start(promptForPermissions: Bool = true) -> Bool {
-        stop()
+        recoveryEnabled = true
+        // Install before attempting the tap: an initial failure must recover
+        // after authorization changes, without requiring an App restart.
+        installSelfHealing()
+        removeTap()
         touching = 0
         lastTouchTime = 0
         lastSource = .mouse
 
-        let options = ["AXTrustedCheckOptionPrompt": promptForPermissions] as CFDictionary
-        let trusted = AXIsProcessTrustedWithOptions(options)
-        if promptForPermissions { _ = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent) }
+        if promptForPermissions { requestAccess() }
+        let access = readAccess()
+        lastAccess = access
+        // Do not let periodic recovery cause repeated system prompts while
+        // the current process still has neither relevant authorization.
+        if !promptForPermissions && !access.accessibility && !access.postEvent {
+            recordStartup(access: access, created: false, enabled: false)
+            return false
+        }
 
         let scrollMask: CGEventMask = 1 << CGEventType.scrollWheel.rawValue
         let gestureMask: CGEventMask = 1 << gestureEventType.rawValue
         let userInfo = Unmanaged.passUnretained(self).toOpaque()
 
-        guard let active = CGEvent.tapCreate(
-            tap: .cgSessionEventTap,
-            place: .tailAppendEventTap,
-            options: .defaultTap,
-            eventsOfInterest: scrollMask | gestureMask,
-            callback: scrollEventCallback,
-            userInfo: userInfo
-        ) else {
-            NSLog("ScrollReverser: event tap creation failed (trusted=\(trusted))")
+        guard let active = makeTap(scrollMask | gestureMask, scrollEventCallback, userInfo) else {
+            recordStartup(access: access, created: false, enabled: false)
             return false
         }
 
@@ -173,32 +224,42 @@ class ScrollReverser {
 
         activeTap = active
         activeRunLoopSource = activeSrc
-        installSelfHealing()
-        NSLog("ScrollReverser: taps installed (mouseRev=\(reverseMouse), trackpadRev=\(reverseTrackpad))")
-        return true
+        let enabled = CGEvent.tapIsEnabled(tap: active)
+        if !enabled { removeTap() }
+        recordStartup(access: access, created: true, enabled: enabled)
+        return enabled
+    }
+
+    private func recordStartup(access: ScrollAccessSnapshot, created: Bool, enabled: Bool) {
+        startupFailure = access.failure(tapEnabled: enabled)
+        ErrorLog.log("滚动控制: AX=\(access.accessibility), PostEvent=\(access.postEvent), ListenEvent=\(access.listenEvent.rawValue), tapCreated=\(created), tapEnabled=\(enabled)")
+        onStateChange?()
     }
 
     /// 睡醒/会话切回后 tap 可能被系统拆掉或禁用且不再来事件——加观察者重建 + 看门狗兜底。
     /// TilingController 有同款防护；此前 ScrollReverser 失效只能靠用户手动“重新检测”。
     private func installSelfHealing() {
-        guard !selfHealingInstalled else { return }
-        selfHealingInstalled = true
-        let center = NSWorkspace.shared.notificationCenter
-        for name in [NSWorkspace.didWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification] {
-            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                guard let self, self.activeTap != nil else { return }
-                NSLog("ScrollReverser: rebuilding tap after wake/session-active")
-                if !self.start(promptForPermissions: false) {
-                    ErrorLog.log("滚动反转: 唤醒后重建 event tap 失败，功能已停用")
-                    self.onTapRebuildFailed?()
-                }
+        if observers.isEmpty {
+            let center = NSWorkspace.shared.notificationCenter
+            for name in [NSWorkspace.didWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification] {
+                observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                    guard let self, self.recoveryEnabled else { return }
+                    _ = self.start(promptForPermissions: false)
+                })
             }
         }
-        let t = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
-            guard let self, let tap = self.activeTap else { return }
-            if !CGEvent.tapIsEnabled(tap: tap) {
-                NSLog("ScrollReverser: watchdog found tap disabled — re-enabling")
-                CGEvent.tapEnable(tap: tap, enable: true)
+        guard watchdog == nil else { return }
+        let t = Timer(timeInterval: retryInterval, repeats: true) { [weak self] _ in
+            guard let self, self.recoveryEnabled else { return }
+            if let tap = self.activeTap {
+                if !CFMachPortIsValid(tap) || !CGEvent.tapIsEnabled(tap: tap) {
+                    _ = self.start(promptForPermissions: false)
+                }
+            } else {
+                let access = self.readAccess()
+                if access.accessibility || access.postEvent || access != self.lastAccess {
+                    _ = self.start(promptForPermissions: false)
+                }
             }
         }
         RunLoop.main.add(t, forMode: .common)
@@ -206,6 +267,12 @@ class ScrollReverser {
     }
 
     func stop() {
+        recoveryEnabled = false
+        watchdog?.invalidate(); watchdog = nil
+        removeTap()
+    }
+
+    private func removeTap() {
         if let tap = activeTap {
             CGEvent.tapEnable(tap: tap, enable: false)
             CFMachPortInvalidate(tap)
@@ -216,6 +283,10 @@ class ScrollReverser {
         activeTap = nil
         activeRunLoopSource = nil
     }
+
+    #if BENTO_TESTS
+    var testWatchdog: Timer? { watchdog }
+    #endif
 
     func reenableTap() {
         if let tap = activeTap {

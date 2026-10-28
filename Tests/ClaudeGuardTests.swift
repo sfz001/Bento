@@ -97,16 +97,12 @@ struct ClaudeGuardTests {
 
     static func testMerge() throws {
         let original = "# user merge\nipv6: false\n"
-        let enabled = try clashMergeContents(original, proxyGroup: "PROXY")
-        precondition(enabled.contains("DOMAIN-SUFFIX,anthropic.com,PROXY"))
-        let repeated = try clashMergeContents(enabled, proxyGroup: "PROXY")
-        let removed = try clashMergeContents(enabled, proxyGroup: nil)
-        precondition(repeated == enabled)
-        precondition(removed == original)
-        do {
-            _ = try clashMergeContents("prepend-rules:\n  - DOMAIN,example.com,DIRECT\n", proxyGroup: "PROXY")
-            preconditionFailure("Existing prepend-rules must not be overwritten")
-        } catch ClashMergeError.existingPrependRules {}
+        let legacy = original + clashMergeBeginMarker + "\nprepend-rules:\n  - DOMAIN-SUFFIX,anthropic.com,PROXY\n" + clashMergeEndMarker + "\n"
+        let migrated = try removingLegacyClashMergeBlock(legacy)
+        precondition(migrated == original)
+        let userRules = "prepend-rules:\n  - DOMAIN,example.com,DIRECT\n"
+        let untouched = try removingLegacyClashMergeBlock(userRules)
+        precondition(untouched == userRules)
     }
 
     static func testClashProbe() {
@@ -123,7 +119,32 @@ struct ClaudeGuardTests {
         let rules = #"{"rules":[{"type":"DomainSuffix","payload":"claude.ai","proxy":"PROXY"},{"type":"DomainSuffix","payload":"claude.com","proxy":"PROXY"},{"type":"DomainSuffix","payload":"claudeusercontent.com","proxy":"PROXY"},{"type":"DomainSuffix","payload":"claudemcpcontent.com","proxy":"PROXY"},{"type":"DomainSuffix","payload":"anthropic.com","proxy":"PROXY"}]}"#
         let proxies = #"{"proxies":{"PROXY":{"type":"Selector","now":"node"},"node":{"type":"Shadowsocks"}}}"#
         precondition(ClashConfiguration.parse(yaml).proxyGroups == ["PROXY"])
+        let groupVariants = [0, 2, 4].map { indentation -> String in
+            let pad = String(repeating: " ", count: indentation)
+            return """
+            tun:
+              enable: true
+              auto-route: true
+              device: utun1024
+            proxy-groups:
+            \(pad)- type: select
+            \(pad)  name: "PROXY"
+            \(pad)  metadata:
+            \(pad)    name: nested-name-must-not-be-a-group
+            \(pad)  proxies:
+            \(pad)    - name: nested-item-must-not-be-a-group
+            \(pad)- name: 'Backup'
+            \(pad)  type: select
+            proxies:
+            - name: node-must-not-be-a-group
+              type: ss
+            """
+        }
+        for variant in groupVariants {
+            precondition(ClashConfiguration.parse(variant).proxyGroups == ["PROXY", "Backup"], "Group sequence indentation and field order must not change its names")
+        }
         precondition(ClashProbe.rulesRouteToProxy(rules, groups: ["PROXY"]))
+        var runtimeYAML = yaml
         var routeInterface = "utun1024"
         var ipv6Route: (status: Int32, output: String) = (0, "interface: utun1024\n")
         var runningConfigs = #"{"mode":"rule"}"#
@@ -135,7 +156,7 @@ struct ClaudeGuardTests {
            processArguments: { _ in ["/cores/verge-mihomo-alpha", "-f", "/Users/test/Library/Application Support/Clash/config.yaml", "-ext-ctl-unix", "/tmp/clash.sock"] },
            readFile: { path in
                precondition(path == "/Users/test/Library/Application Support/Clash/config.yaml", "Real argv must preserve spaces in config paths")
-               return yaml
+               return runtimeYAML
            }, activeInterface: { $0 == "utun1024" },
            request: { _, _, path in
                switch path {
@@ -148,6 +169,12 @@ struct ClaudeGuardTests {
            })
         do { try probe.check() } catch { preconditionFailure("Expected ready probe: \(error)") }
         precondition((try? probe.preferredProxyGroup()) == "PROXY")
+        for variant in groupVariants {
+            runtimeYAML = variant
+            do { try probe.check() } catch { preconditionFailure("Valid group YAML must pass the complete probe: \(error)") }
+            precondition((try? probe.preferredProxyGroup()) == "PROXY")
+        }
+        runtimeYAML = yaml
         routeInterface = "en0"
         do {
             try probe.check()
