@@ -6,12 +6,21 @@ enum ClaudeGuardCommand {
         let arguments = CommandLine.arguments
         guard arguments.count == 3, arguments[1] == "--claude-guard" else { return false }
         let action = arguments[2]
-        guard ["on", "off", "status"].contains(action) else {
-            FileHandle.standardError.write(Data("用法：Bento --claude-guard on|off|status\n".utf8))
+        guard ["on", "off", "status", "unregister"].contains(action) else {
+            FileHandle.standardError.write(Data("用法：Bento --claude-guard on|off|status|unregister\n".utf8))
             exit(2)
         }
         let service = SMAppService.daemon(plistName: claudeGuardDaemonPlist)
+        if action == "on", let signingError = claudeGuardSigningError {
+            FileHandle.standardError.write(Data("\(signingError)\n".utf8))
+            exit(1)
+        }
         do {
+            if action == "unregister" {
+                try service.unregister()
+                print("已注销 Claude 防护守护；此应急命令不清理 hosts，常规清理请使用 off")
+                exit(0)
+            }
             if action != "status", service.status != .enabled { try service.register() }
             if service.status != .enabled {
                 print(service.status == .requiresApproval ? "需要在系统设置中允许 Bento 后台守护进程" : "Claude 防护已关闭")

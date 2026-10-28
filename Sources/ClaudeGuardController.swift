@@ -44,6 +44,11 @@ final class ClaudeGuardController {
 
     func setEnabled(_ enabled: Bool) {
         guard !operationInFlight else { return }
+        if enabled, let signingError = claudeGuardSigningError {
+            snapshot = ClaudeGuardSnapshot(["enabled": false, "ready": false, "error": signingError])
+            onUpdate?()
+            return
+        }
         operationInFlight = true
         onUpdate?()
         DispatchQueue.main.async {

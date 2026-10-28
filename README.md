@@ -106,6 +106,8 @@ open Bento.app
 
 `build_app.sh` 沿用本机 `Bento Local Code Signing` 自签名身份，分别签名内嵌 daemon 和主 App，并把主 App 的 designated requirement 密封给 XPC 客户端校验；构建会执行严格签名检查。当前未启用 App Sandbox、未配置 Hardened Runtime，也**没有执行公证**。
 
+**本机实测限制（macOS 27.2）**：后台项目授权可以通过，但 AMFI 会以证书链不受系统信任为由拒绝启动自签名 root daemon。当前构建会在开启前提示需要 Developer ID，不再进入反复启动失败的循环。仅重启 Bento 或重新批准后台项目不能绕过此限制。
+
 对外分发时应改用 Developer ID，在同一团队/签名体系下签 App 与 daemon，按分发策略启用 Hardened Runtime，并用 `notarytool` 公证及 stapler 附票；不要轮换本机现有自签名身份，否则既有辅助功能和输入监控授权会失效。
 
 ---
