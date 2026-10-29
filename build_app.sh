@@ -6,11 +6,6 @@ APP_NAME="Bento"
 BUNDLE_ID="com.sz.bento"
 APP_BUNDLE="$SCRIPT_DIR/$APP_NAME.app"
 LOCAL_CODESIGN_NAME="Bento Local Code Signing"
-CODESIGN_NAME="${BENTO_CODESIGN_IDENTITY:-$LOCAL_CODESIGN_NAME}"
-CODESIGN_OPTIONS=()
-if [ "$CODESIGN_NAME" != "$LOCAL_CODESIGN_NAME" ] || [ "${BENTO_HARDENED_RUNTIME:-0}" = "1" ]; then
-    CODESIGN_OPTIONS=(--options runtime)
-fi
 LOCAL_CODESIGN_DIR="$SCRIPT_DIR/.bento-codesign"
 LOCAL_CODESIGN_KEYCHAIN="$HOME/Library/Keychains/BentoLocalCodeSigning.keychain-db"
 LOCAL_CODESIGN_PASSWORD_FILE="$LOCAL_CODESIGN_DIR/keychain-password"
@@ -153,6 +148,16 @@ ensure_local_codesign_identity() {
     ensure_codesign_keychain_visible
 }
 
+unlock_existing_local_codesign_identity() {
+    if [ ! -f "$LOCAL_CODESIGN_KEYCHAIN" ]; then
+        echo "error: 原自签名钥匙串不存在；保留现有 App，不自动重建签名。" >&2
+        return 1
+    fi
+    ensure_codesign_password
+    security unlock-keychain -p "$LOCAL_CODESIGN_PASSWORD" "$LOCAL_CODESIGN_KEYCHAIN" || return 1
+    ensure_codesign_keychain_visible
+}
+
 # --test：仅替代接口与独立子进程回归，不更改真实显示器/权限/系统设置。
 if [ "${1:-}" = "--test" ]; then
     exec "$SCRIPT_DIR/Tests/run_all_tests.sh"
@@ -169,6 +174,17 @@ if [ "${1:-}" = "--check" ]; then
         -target arm64-apple-macosx14.0
     echo "OK"
     exit 0
+fi
+
+# 在编译和删包前确认签名，避免一次默认构建把 Apple 签名退回自签名，
+# 或因缺私钥在删掉可运行的旧包后才失败。检查/测试模式不访问签名身份。
+source "$SCRIPT_DIR/Scripts/build_signing.sh"
+bento_select_codesign_identity
+CODESIGN_OPTIONS=()
+if [ "$CODESIGN_NAME" != "$LOCAL_CODESIGN_NAME" ] \
+    || [ "${BENTO_HARDENED_RUNTIME:-0}" = "1" ] \
+    || [ "$CODESIGN_PRESERVE_RUNTIME" = "1" ]; then
+    CODESIGN_OPTIONS=(--options runtime)
 fi
 
 # 默认只编本机的 arm64（构建时间减半）；需要双架构时 BUILD_UNIVERSAL=1 ./build_app.sh
@@ -290,23 +306,15 @@ fi
 /usr/libexec/PlistBuddy -c "Add :BentoBuildCommit string $BUILD_COMMIT" "$APP_BUNDLE/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :BentoBuildTime string $(date -u +%Y-%m-%dT%H:%M:%SZ)" "$APP_BUNDLE/Contents/Info.plist"
 
-if [ "$CODESIGN_NAME" = "$LOCAL_CODESIGN_NAME" ]; then
-    ensure_local_codesign_identity
-else
-    security find-identity -v -p codesigning | grep -F "$CODESIGN_NAME" >/dev/null || {
-        echo "error: 找不到可用签名身份或私钥: $CODESIGN_NAME" >&2
-        exit 1
-    }
-fi
 codesign \
     --force \
-    --sign "$CODESIGN_NAME" \
+    --sign "$CODESIGN_IDENTITY" \
     "${CODESIGN_OPTIONS[@]}" \
     --identifier "$BUNDLE_ID.claudeguard" \
     "$APP_BUNDLE/Contents/Library/LaunchDaemons/ClaudeGuard"
 codesign \
     --force \
-    --sign "$CODESIGN_NAME" \
+    --sign "$CODESIGN_IDENTITY" \
     "${CODESIGN_OPTIONS[@]}" \
     --identifier "$BUNDLE_ID" \
     "$APP_BUNDLE"
@@ -321,7 +329,7 @@ fi
 printf '%s\n' "$CLIENT_REQUIREMENT" > "$APP_BUNDLE/Contents/Library/LaunchDaemons/ClaudeGuardClient.requirement"
 codesign \
     --force \
-    --sign "$CODESIGN_NAME" \
+    --sign "$CODESIGN_IDENTITY" \
     "${CODESIGN_OPTIONS[@]}" \
     --identifier "$BUNDLE_ID" \
     "$APP_BUNDLE"

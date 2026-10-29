@@ -957,16 +957,22 @@ class TilingController: NSObject {
         resetInputState()
     }
 
+    /// 权限设置返回时立即重试，不重复安装定时器或系统观察者。
+    func refreshPermissions() {
+        watchdogTick()
+    }
+
     private func watchdogTick() {
+        let trusted = AXIsProcessTrustedWithOptions(nil)
         if let tap {
             if !CGEvent.tapIsEnabled(tap: tap) {
                 CGEvent.tapEnable(tap: tap, enable: true)
                 resetInputState()
             }
-        } else {
+        } else if trusted {
+            // 无授权时反复创建修改型 tap 可能反复触发系统提示；授权变化后再试。
             installTap() // tap 创建失败过（如权限刚授予）则重试
         }
-        let trusted = AXIsProcessTrustedWithOptions(nil)
         if trusted != permissionOK {
             permissionOK = trusted
             onPermissionStateChange?(trusted)

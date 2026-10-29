@@ -50,10 +50,27 @@ struct ScrollRecoveryTests {
             makeTap: { _, _, _ in changedAttempts += 1; return nil }, retryInterval: 0.02)
         precondition(!changed.start(promptForPermissions: false))
         precondition(changed.startupFailure == .authorization && changedAttempts == 0)
+        changed.refreshPermissions()
+        precondition(changedAttempts == 0 && prompts == 0,
+                     "Rechecking denied authorization must not request permission or create a tap")
         access = granted
-        pump { changedAttempts > 0 }
+        changed.refreshPermissions()
+        precondition(changedAttempts == 1,
+                     "Returning from settings must retry immediately, without waiting for the watchdog")
         precondition(changed.startupFailure == .eventTap && prompts == 0,
                      "New authorization must silently retry and replace the stale authorization error")
+        changed.stop()
+        changed.refreshPermissions()
+        precondition(changedAttempts == 1,
+                     "A settings notification after stop must not restart scroll handling")
+
+        // Keep the unattended path covered as well as the immediate settings-return path.
+        access = denied
+        precondition(!changed.start(promptForPermissions: false))
+        access = granted
+        pump { changedAttempts > 1 }
+        precondition(changed.startupFailure == .eventTap && prompts == 0,
+                     "Authorization changes must recover through the watchdog without user interaction")
         changed.stop()
 
         precondition(!reverser.start())

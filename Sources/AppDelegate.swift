@@ -17,7 +17,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var remoteMonitorEnabled = UserDefaults.standard.object(forKey: "RemoteMonitorEnabled") as? Bool ?? true
     private var scrollPermissionItem: NSMenuItem!
     private var openAccessibilityItem: NSMenuItem!
-    private var openInputMonitoringItem: NSMenuItem!
+    private var permissionHelpItem: NSMenuItem!
     private var retryScrollPermissionsItem: NSMenuItem!
     private var reverseMouseItem: NSMenuItem!
     private var reverseTrackpadItem: NSMenuItem!
@@ -43,7 +43,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// 上一轮轮询的连接状态（nil = 尚未轮询过），用于边沿触发
     private var lastPolledConnected: Bool?
     private let pollQueue = DispatchQueue(label: "com.sz.bento.connection-poll")
-    private var hasShownScrollPermissionAlert = false
+    private var hasShownPermissionHelp = false
+    private var permissionChecksStarted = false
+    private lazy var permissionRecoveryModel = PermissionRecoveryModel()
+    private var permissionRecoveryWindow: PermissionRecoveryWindow?
+    private var relaunchInFlight = false
 
     private let launchAgentLabel = "com.sz.bento"
     private var launchAgentPath: String {
@@ -68,6 +72,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         installAutoLaunchIfFirstRun()
         startScrollReverser(showAlert: true)
         startTiling()
+        permissionChecksStarted = true
+        updatePermissionRecovery()
+        // 用户从系统设置返回时马上检测；不请求授权、不自动重启或重置权限。
+        NSWorkspace.shared.notificationCenter.addObserver(self,
+            selector: #selector(permissionSettingsDeactivated(_:)),
+            name: NSWorkspace.didDeactivateApplicationNotification, object: nil)
         iconMgr.start()
         sleepGuard.onStateChange = { [weak self] in self?.refreshSleepGuardState() }
         claudeGuard.onUpdate = { [weak self] in self?.refreshClaudeGuard() }
@@ -103,6 +113,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         iconMgr.stop()
         tiling.stop()
         scrollReverser.stop()
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
         sessionPrepared = false
         screenCtl.restoreDock()
         screenCtl.restoreDisplaySettings()
@@ -159,18 +170,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         reverseTrackpadItem.state = scrollReverser.reverseTrackpad ? .on : .off
         statusMenu.addItem(reverseTrackpadItem)
 
-        scrollPermissionItem = NSMenuItem(title: "滚动功能缺少权限", action: nil, keyEquivalent: "")
+        scrollPermissionItem = NSMenuItem(title: "滚动控制授权尚未生效", action: nil, keyEquivalent: "")
         scrollPermissionItem.isEnabled = false
         scrollPermissionItem.isHidden = true
         statusMenu.addItem(scrollPermissionItem)
 
-        openAccessibilityItem = makeItem("打开「辅助功能」设置", symbol: "accessibility", action: #selector(openAccessibilitySettings))
+        let permissionSettingsName = ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27
+            ? "设备控制和数据访问" : "辅助功能"
+        openAccessibilityItem = makeItem("打开「\(permissionSettingsName)」设置", symbol: "accessibility", action: #selector(openAccessibilitySettings))
         openAccessibilityItem.isHidden = true
         statusMenu.addItem(openAccessibilityItem)
 
-        openInputMonitoringItem = makeItem("打开「输入监控」设置", symbol: "keyboard", action: #selector(openInputMonitoringSettings))
-        openInputMonitoringItem.isHidden = true
-        statusMenu.addItem(openInputMonitoringItem)
+        permissionHelpItem = makeItem("已开启权限仍无效？…", symbol: "questionmark.circle", action: #selector(showPermissionRecovery))
+        permissionHelpItem.isHidden = true
+        statusMenu.addItem(permissionHelpItem)
 
         retryScrollPermissionsItem = makeItem("重新检测滚动权限", symbol: "arrow.clockwise", action: #selector(retryScrollPermissions))
         retryScrollPermissionsItem.isHidden = true
@@ -178,7 +191,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusMenu.addItem(.sectionHeader(title: "分屏（窗口吸附）"))
 
-        tilingPermissionItem = makeItem("分屏需要辅助功能权限（点击打开设置）", symbol: "exclamationmark.triangle", action: #selector(openAccessibilitySettings))
+        tilingPermissionItem = makeItem("分屏授权尚未生效（点击查看恢复方法）", symbol: "exclamationmark.triangle", action: #selector(showPermissionRecovery))
         tilingPermissionItem.isHidden = true
         statusMenu.addItem(tilingPermissionItem)
 
@@ -557,11 +570,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateStatus() {
         guard statusItem != nil, statusMenuItem != nil else { return }
         if tilingPermissionMissing {
-            // 未授予辅助功能权限时，菜单栏图标给出明确状态
-            statusMenuItem.title = "需要辅助功能权限"
+            // 系统开关可能已开启但仍绑定旧签名；只描述当前进程的实际状态。
+            statusMenuItem.title = "当前版本的设备控制授权尚未生效"
             statusMenuItem.image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: nil)
-            setStatusSymbol("exclamationmark.triangle", description: "Bento 需要辅助功能权限")
-            statusItem.button?.toolTip = "Bento 需要辅助功能权限"
+            setStatusSymbol("exclamationmark.triangle", description: "Bento 授权尚未生效")
+            statusItem.button?.toolTip = "Bento 授权尚未生效；可在菜单中查看恢复方法"
             return
         }
         if !remoteMonitorEnabled {
@@ -614,6 +627,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func setTilingPermissionMissing(_ missing: Bool) {
         tilingPermissionMissing = missing
         tilingPermissionItem.isHidden = !missing
+        updatePermissionRecovery()
         updateStatus()
     }
 
@@ -623,9 +637,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func startScrollReverser(showAlert: Bool) {
         scrollReverser.onStateChange = { [weak self] in self?.updateScrollStatus() }
-        if !scrollReverser.start(), showAlert {
+        if !scrollReverser.start(promptForPermissions: showAlert), showAlert {
             DispatchQueue.main.async { [weak self] in
-                self?.showScrollPermissionAlert()
+                guard let self, !self.hasShownPermissionHelp,
+                      self.scrollReverser.startupFailure != nil || self.tilingPermissionMissing else { return }
+                self.hasShownPermissionHelp = true
+                self.showPermissionRecovery()
             }
         }
     }
@@ -635,53 +652,86 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let unavailable = failure != nil
         scrollPermissionItem.isHidden = !unavailable
         openAccessibilityItem.isHidden = !unavailable
-        openInputMonitoringItem.isHidden = !unavailable
+        permissionHelpItem.isHidden = !unavailable && !tilingPermissionMissing
         retryScrollPermissionsItem.isHidden = !unavailable
         scrollPermissionItem.title = failure == .eventTap
             ? "滚动功能暂不可用（请重试，仍失败请重启 Bento）"
             : "滚动控制授权尚未生效"
         retryScrollPermissionsItem.title = failure == .eventTap ? "重试滚动功能" : "重新检测滚动权限"
 
-        let suffix = failure == .eventTap ? "（暂不可用）" : unavailable ? "（需授权）" : ""
+        let suffix = failure == .eventTap ? "（暂不可用）" : unavailable ? "（授权待生效）" : ""
         reverseMouseItem.title = "反转鼠标滚动" + suffix
         reverseTrackpadItem.title = "反转触控板滚动" + suffix
         reverseMouseItem.isEnabled = !unavailable
         reverseTrackpadItem.isEnabled = !unavailable
         reverseMouseItem.state = scrollReverser.reverseMouse ? .on : .off
         reverseTrackpadItem.state = scrollReverser.reverseTrackpad ? .on : .off
+        updatePermissionRecovery()
     }
 
-    private func showScrollPermissionAlert() {
-        guard !hasShownScrollPermissionAlert, let failure = scrollReverser.startupFailure else { return }
-        hasShownScrollPermissionAlert = true
-
-        NSApp.activate(ignoringOtherApps: true)
-
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        if failure == .eventTap {
-            alert.messageText = "Bento 滚动功能暂时未启动"
-            alert.informativeText = "辅助功能授权已通过，但系统未能启用滚动事件处理。Bento 会自动重试；如仍无法恢复，请完全退出并重新打开 Bento。"
-            alert.addButton(withTitle: "重试滚动功能")
-            alert.addButton(withTitle: "稍后")
-            if alert.runModal() == .alertFirstButtonReturn {
-                _ = scrollReverser.start(promptForPermissions: false)
-            }
-            return
+    private func updatePermissionRecovery() {
+        guard permissionChecksStarted else { return }
+        let condition: PermissionRecoveryCondition
+        if tilingPermissionMissing || scrollReverser.startupFailure == .authorization {
+            condition = .authorization
+        } else if scrollReverser.startupFailure == .eventTap {
+            condition = .eventTap
+        } else {
+            condition = .ready
         }
-        alert.messageText = "Bento 的滚动控制授权尚未生效"
-        alert.informativeText = "请检查「系统设置 → 隐私与安全性 → 辅助功能」中的 Bento。Bento 会自动重新检测；如果已勾选但仍无法恢复，请完全退出并重新打开 Bento。"
-        alert.addButton(withTitle: "打开辅助功能设置")
-        alert.addButton(withTitle: "打开输入监控设置")
-        alert.addButton(withTitle: "稍后")
+        if !tilingPermissionMissing, let access = scrollReverser.accessSnapshot,
+           access.accessibility, access.postEvent {
+            permissionRecoveryModel.recordAuthorizationGranted()
+        }
+        permissionHelpItem?.isHidden = condition == .ready
+        permissionRecoveryWindow?.update(permissionRecoveryModel.presentation(for: condition))
+    }
 
-        switch alert.runModal() {
-        case .alertFirstButtonReturn:
-            openAccessibilitySettings()
-        case .alertSecondButtonReturn:
-            openInputMonitoringSettings()
-        default:
-            break
+    @objc private func showPermissionRecovery() {
+        if permissionRecoveryWindow == nil {
+            permissionRecoveryWindow = PermissionRecoveryWindow(
+                onOpenSettings: { [weak self] in self?.openAccessibilitySettings() },
+                onRevealApp: { NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL]) },
+                onRetry: { [weak self] in self?.retryScrollPermissions() },
+                onRestart: { [weak self] in self?.restartForPermissions() })
+        }
+        updatePermissionRecovery()
+        permissionRecoveryWindow?.show()
+    }
+
+    @objc private func permissionSettingsDeactivated(_ notification: Notification) {
+        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+              app.bundleIdentifier == "com.apple.systempreferences" else { return }
+        retryScrollPermissions()
+    }
+
+    private func restartForPermissions() {
+        guard !relaunchInFlight else { return }
+        // 等当前 PID 正常退出后才 open，避免单实例保护挡掉新进程。
+        // 路径和 PID 作为独立参数传入，不拼进 shell 代码；不发送强制退出信号。
+        let launcher = Process()
+        launcher.executableURL = URL(fileURLWithPath: "/bin/sh")
+        launcher.arguments = ["-c", """
+            attempt=0
+            while kill -0 "$1" 2>/dev/null; do
+                attempt=$((attempt + 1))
+                [ "$attempt" -lt 200 ] || exit 1
+                sleep 0.1
+            done
+            exec /usr/bin/open "$2"
+            """, "bento-relaunch", String(ProcessInfo.processInfo.processIdentifier), Bundle.main.bundlePath]
+        launcher.standardOutput = FileHandle.nullDevice
+        launcher.standardError = FileHandle.nullDevice
+        do {
+            try launcher.run()
+            relaunchInFlight = true
+            NSApp.terminate(nil)
+        } catch {
+            ErrorLog.log("权限恢复: 无法重启 Bento：\(error.localizedDescription)")
+            let alert = NSAlert()
+            alert.messageText = "无法自动重启 Bento"
+            alert.informativeText = "请从菜单退出 Bento，再重新打开当前应用。"
+            alert.runModal()
         }
     }
 
@@ -759,12 +809,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         openPrivacySettingsPane("Privacy_Accessibility")
     }
 
-    @objc private func openInputMonitoringSettings() {
-        openPrivacySettingsPane("Privacy_ListenEvent")
-    }
-
     @objc private func retryScrollPermissions() {
-        startScrollReverser(showAlert: false)
+        scrollReverser.refreshPermissions()
+        tiling.refreshPermissions()
+        setTilingPermissionMissing(!tiling.isPermissionOK)
+        updatePermissionRecovery()
     }
 
     private var rehearsalActive = false

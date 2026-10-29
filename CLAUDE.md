@@ -29,6 +29,8 @@ open Bento.app             # Run
 
 Build requires macOS 14.0+ SDK. Uses `swiftc` directly plus `clang` for `Sources/CrashSignal.c` (no Xcode project/SPM). Frameworks: AppKit, CoreGraphics, IOKit (scroll input permissions and sleep assertions).
 
+Default builds preserve the existing app's exact leaf signing certificate through `Scripts/build_signing.sh`; check availability before compiling or removing the old bundle. Missing/revoked/ambiguous identities and damaged signatures fail rather than silently switching to local signing. `BENTO_CODESIGN_IDENTITY` remains the explicit override; a first build with no app retains the local default. `--check`/`--test` do not access signing identities.
+
 ## Architecture
 
 Code lives in `Sources/`, one file per module, compiled together by `build_app.sh` (`swiftc Sources/*.swift`; top-level entry statements must stay in `main.swift`):
@@ -39,6 +41,7 @@ Code lives in `Sources/`, one file per module, compiled together by `build_app.s
 - `Sources/LayoutModel.swift`, `Sources/TilingGeometry.swift`, `Sources/MenuBarSemantics.swift`, `Sources/LogRateLimiter.swift` — logic extracted for focused tests
 - `Sources/CrashSignal.c`, `Sources/CrashLogging.swift` — async-signal-safe fatal markers and installation
 - `Sources/main.swift` — single-instance guard, exception/signal logging, build metadata, NSApplication bootstrap
+- `Sources/PermissionRecovery.swift` — modeless, live-updating permission help with current app path/signing identity, a successful-authorization signing baseline, and explicit settings/recheck/restart actions. A Settings checkbox cannot be read through the public API; never claim it is off or definitively bound to an old signature. Record signing history only after effective AX/PostEvent authorization, not on failed startup. No TCC database edits or resets. AppDelegate retries silently when System Settings deactivates and relaunches only when the user requests it, waiting for graceful exit before opening the same bundle.
 - `Sources/ClaudeGuardProtocol.swift`, `Sources/ClaudeGuardController.swift` — fixed XPC surface, daemon registration/status and Chinese menu/help UI. The daemon build also compiles the protocol but has its own entry point.
 - `ClaudeGuard/main.swift`, `ClaudeGuardDaemon.swift` — separate daemon entry, one-second serial loop, persistent enabled state, and Foundation-enforced per-message code-signing requirements (macOS 13+, configured before connection resume). The daemon derives the App requirement from its own signed designated requirement, preserving the certificate/Team constraints and replacing only the exact daemon identifier; the packaged `.requirement` is diagnostic only. `ClaudeGuardHosts.swift` owns the 22 built-in domains and locked/atomic managed-section writes; `ClaudeGuardEngine.swift` emits DNS flushes only on actual hosts changes. `ClashProbe.swift` requires core identity, kernel-read argv (paths may contain spaces), active config, declared interface address, actual route and controller/rules evidence. `ClashMerge.swift` preserves the global `profiles/Script.js` and appends a marked wrapper around its standard `function main`; the wrapper prepends five rules after the user main returns. Verge 2.5.8 ignores legacy Merge `prepend-rules`, so those old markers are migrated away. Never replace the subscription `rules` list. A subsequent profile script can still override rules, so the core must actually expose the five rules first before hosts is cleared. External file writes need a Verge reload (Subscriptions → Reactivate profile); do not claim writing the file alone activated the rules. The root daemon never evaluates user JavaScript, and rejects unsupported main syntax. Removal restores the original script bytes, including an absent EOF newline; reads/writes reject symlink paths and use directory descriptors with atomic replacement. Do not put daemon top-level code under `Sources/`, where the App wildcard would compile it.
 
@@ -130,5 +133,6 @@ File-scope `private`/`fileprivate` declarations don't cross these file boundarie
 - 菜单「熄屏流程演练…」仅在监控开启且无会话时可开始，用户确认后走真实连接处理与锁定恢复，10 秒自动收尾；真实连接取消演练计时并接管。不要为了自动测试而调用真实硬件演练。
 - 等待锁定期间保留 sessionPrepared，实际恢复开始才清除，保证重连后的热插/唤醒保护；pendingRestore 存在时不重复启动断开收尾。
 - 滚动自愈调用 start(promptForPermissions: false)，只有启动和用户手动重试可请求授权。权限界面与用途说明为中文。
+- 权限恢复窗口使用非模态窗口，随实际状态更新；成功后清除旧提示，相同状态不重写可复制文本。从设置返回和「重新检测」均静默重试；未授权时分屏 watchdog 不反复创建 tap。macOS 27 的权限页名为「设备控制和数据访问」，旧版称「辅助功能」。签名改变后的旧授权需由用户在系统设置中重新添加，不能声称代码能绕过系统确认。
 - 菜单栏模块保持 featureEnabled=false。模块名称去掉中英文逗号后的动态状态；溢出区有 absent/collapsed/expanded/unavailable 四态，无溢出不妨碍顺序采纳，不可读时停止纠偏。
 - 普通 ErrorLog 按消息/可选模板键限速，60 秒汇总重复次数，最多缓存 128 项；logSync 与 C 致命信号标记不受限速影响。Info.plist 包含 CFBundleVersion（提交计数）、BentoBuildCommit（含 dirty 标记）、BentoBuildTime；启动同步记录。

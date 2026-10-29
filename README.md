@@ -31,7 +31,7 @@ A single app for a grab-bag of small personal utilities. Currently: remote-conne
 - 鼠标和触控板独立反转滚动方向，互不影响
 - 默认：鼠标反转（传统方向）、触控板保持系统设置（自然方向）
 - 菜单栏可即时切换两个开关，状态自动持久化
-- 需要授予「辅助功能」和「输入监控」权限
+- 需要授予「设备控制和数据访问」（旧版 macOS 称「辅助功能」）权限；输入监控仅用于诊断，不是滚动控制的额外门槛
 
 #### 3. 分屏（窗口吸附，类似 MaxTo/Moom）
 
@@ -92,7 +92,7 @@ open Bento.app
 ```
 
 1. 启动后菜单栏出现眼睛图标
-2. 首次启动会请求权限（用于滚动方向控制）。在「系统设置 → 隐私与安全性」里确认 Bento 已允许「辅助功能」和「输入监控」，**然后点击 Bento 菜单中的「重新检测滚动权限」，无需退出重开**
+2. 首次启动会请求设备控制权限。在「系统设置 → 隐私与安全 → 设备控制和数据访问」（旧版为「辅助功能」）允许 Bento；返回后会自动检测，也可点「重新检测滚动权限」。若已开启仍无效，菜单「已开启权限仍无效？…」会显示当前 App 路径和实时状态，并提供重启入口。更新或换签后，旧授权条目可能需在系统设置中手动移除，再用「+」添加当前 App；Bento 不会自行修改系统授权。
 3. 首次启动登记开机自启，后续由菜单开关控制；若系统要求批准，菜单会引导到登录项设置
 4. 点击菜单栏图标可看状态、切换各功能开关、编辑分屏布局、启动熄屏演练、退出
 
@@ -104,7 +104,7 @@ open Bento.app
 
 ### 签名与分发
 
-`build_app.sh` 沿用本机 `Bento Local Code Signing` 自签名身份，分别签名内嵌 daemon 和主 App，并把主 App 的 designated requirement 密封给 XPC 客户端校验；构建会执行严格签名检查。当前未启用 App Sandbox、未配置 Hardened Runtime，也**没有执行公证**。
+`build_app.sh` 默认复用现有 `Bento.app` 的同一张签名证书，并在编译前确认有效证书和私钥可用；缺失时停止，保留旧 App。它不会将 Apple 签名悄悄改回自签名。首次构建没有现有 App 时，仍创建或复用 `Bento Local Code Signing`。可用 `BENTO_CODESIGN_IDENTITY="证书名称或 SHA-1"` 明确指定身份；Apple 签名自动启用 Hardened Runtime。App 和 daemon 使用同一身份，构建后执行严格签名检查，XPC 从 daemon 自身签名派生主 App 的信任要求。当前未启用 App Sandbox，也**没有执行公证**。
 
 **本机实测限制（macOS 27.2）**：后台项目授权可以通过，但 AMFI 会以证书链不受系统信任为由拒绝启动自签名 root daemon。当前构建会在开启前提示需要 Developer ID，不再进入反复启动失败的循环。仅重启 Bento 或重新批准后台项目不能绕过此限制。
 
@@ -135,7 +135,7 @@ open Bento.app
 - Mouse and trackpad scroll directions can be reversed independently
 - Defaults: mouse reversed (traditional direction), trackpad untouched (natural direction)
 - Toggle either from the menu bar — changes apply instantly and persist
-- Requires Accessibility and Input Monitoring permissions
+- Requires device-control permission (Accessibility on earlier macOS versions); Input Monitoring is diagnostic, not an additional requirement for scroll control
 
 #### 3. Window tiling (MaxTo/Moom-style)
 
@@ -182,7 +182,7 @@ open Bento.app
 ```
 
 1. An eye icon appears in the menu bar
-2. On first launch you'll be prompted for permissions used by the scroll reverser. Confirm Bento is allowed under System Settings → Privacy & Security → Accessibility and Input Monitoring, **then click “重新检测滚动权限” in Bento’s menu; no relaunch is needed**
+2. Allow Bento under System Settings → Privacy & Security → Accessibility (called “设备控制和数据访问” on macOS 27). Bento rechecks when you return from Settings. If the switch is on but access still fails, “已开启权限仍无效？…” shows live status, the current app path, and a restart button. After a signing change, you may need to remove the old entry and add the current app again in System Settings. Bento never resets system permissions itself.
 3. Launch-at-login is registered on first launch and controlled by the menu toggle afterward; pending system approval links to Login Items settings
 4. Click the menu bar icon to see status, toggle features, edit tiling layouts, start a screen-off rehearsal, or quit
 
@@ -195,13 +195,15 @@ open Bento.app
 
 ```bash
 ./build_app.sh --check   # Swift 类型检查 / type-check
-./build_app.sh --test    # 9 组自动回归 / 9 regression suites
+./build_app.sh --test    # 全部自动回归 / all regression suites
 ./build_app.sh --relaunch
 ```
 
 自动测试不改真实显示器、Dock 或权限；具体覆盖范围见 [Tests/README.md](Tests/README.md)。实际远程连接、真实硬件镜像切换和编辑器交互仍需在本机验证；新增菜单演练入口供主动检查。
 
 Tests use substitute display/process interfaces and do not change physical displays, Dock, or permissions. See [Tests/README.md](Tests/README.md). Real remote sessions and hardware/UI behavior still require local validation; the rehearsal menu provides an explicit way to exercise the screen-off workflow.
+
+Default builds preserve the installed app's exact signing certificate and stop before compilation if its identity is unavailable. A fresh build retains the local-signing default. Set `BENTO_CODESIGN_IDENTITY` explicitly to change identity; changing it may require reauthorizing Bento in System Settings.
 
 构建的 Info.plist 记录数字版本、短提交号、dirty 标志和构建时间；启动时写入 `~/Library/Application Support/Bento/error.log`。普通重复日志按 60 秒汇总；致命信号直接追加标记，系统崩溃报告仍保留。Dock 退出恢复最多等待 2 秒，超时快照留给下次启动。
 

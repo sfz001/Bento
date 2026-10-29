@@ -158,6 +158,7 @@ class ScrollReverser {
     private let retryInterval: TimeInterval
     private var lastAccess: ScrollAccessSnapshot?
     private(set) var startupFailure: ScrollStartupFailure?
+    var accessSnapshot: ScrollAccessSnapshot? { lastAccess }
 
     /// 启动、自动恢复的成功和失败都通知菜单（主线程），避免保留旧的失败提示。
     var onStateChange: (() -> Void)?
@@ -234,6 +235,19 @@ class ScrollReverser {
         startupFailure = access.failure(tapEnabled: enabled)
         ErrorLog.log("滚动控制: AX=\(access.accessibility), PostEvent=\(access.postEvent), ListenEvent=\(access.listenEvent.rawValue), tapCreated=\(created), tapEnabled=\(enabled)")
         onStateChange?()
+    }
+
+    /// 从设置返回或用户点“重新检测”时立即刷新。保持正常工作的 tap，避免一次
+    /// 权限检查中断滚动；未工作的 tap 则走同一条静默恢复路径。
+    func refreshPermissions() {
+        guard recoveryEnabled else { return }
+        if let tap = activeTap, CFMachPortIsValid(tap), CGEvent.tapIsEnabled(tap: tap) {
+            let access = readAccess()
+            lastAccess = access
+            recordStartup(access: access, created: true, enabled: true)
+        } else {
+            _ = start(promptForPermissions: false)
+        }
     }
 
     /// 睡醒/会话切回后 tap 可能被系统拆掉或禁用且不再来事件——加观察者重建 + 看门狗兜底。
