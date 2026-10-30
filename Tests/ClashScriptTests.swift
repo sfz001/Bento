@@ -34,19 +34,31 @@ import JavaScriptCore
         }
         """
         let enabled = try clashScriptContents(original, proxyGroup: "PROXY")
-        let result = evaluate(enabled, expression: "main.call({tag:'receiver'}, {rules:['DOMAIN-SUFFIX,claude.ai,PROXY','MATCH,ORIGINAL']}, 'profile')").toDictionary()!
+        let result = evaluate(enabled, expression: "main.call({tag:'receiver'}, {rules:['DOMAIN-SUFFIX,claude.ai,PROXY','MATCH,ORIGINAL'],'proxy-groups':[{name:'PROXY'}]}, 'profile')").toDictionary()!
         let guarded = claudeProxyRuleDomains.map { "DOMAIN-SUFFIX,\($0),PROXY" }
         precondition(result["rules"] as? [String] == guarded + ["PROCESS-NAME,fixture,DIRECT", "MATCH,ORIGINAL"])
         precondition((result["calls"] as? NSNumber)?.intValue == 1)
         precondition(result["profile"] as? String == "profile" && result["receiver"] as? String == "receiver")
         precondition((result["dns"] as? [String: Bool])?["enable"] == true)
-        let repeated = evaluate(try clashScriptContents(template, proxyGroup: "PROXY"), expression: "main(main({rules:['MATCH,ORIGINAL']})).rules").toArray() as! [String]
+        let repeated = evaluate(try clashScriptContents(template, proxyGroup: "PROXY"), expression: "main(main({rules:['MATCH,ORIGINAL'],'proxy-groups':[{name:'PROXY'}]})).rules").toArray() as! [String]
         precondition(repeated == guarded + ["MATCH,ORIGINAL"])
+        let subscription = "{rules:['MATCH,一元机场'],'proxy-groups':[{name:'一元机场'},{name:'自动选择'},{name:'故障转移'}]}"
+        let adapted = evaluate(enabled, expression: "main(\(subscription)).rules").toArray() as! [String]
+        precondition(adapted == claudeProxyRuleDomains.map { "DOMAIN-SUFFIX,\($0),一元机场" } + ["PROCESS-NAME,fixture,DIRECT", "MATCH,一元机场"])
+        let preferred = try clashScriptContents(template, proxyGroup: "自动选择")
+        precondition(evaluate(preferred, expression: "main(\(subscription)).rules").toArray() as! [String]
+            == claudeProxyRuleDomains.map { "DOMAIN-SUFFIX,\($0),自动选择" } + ["MATCH,一元机场"])
         let group = "代理\"'); globalThis.injected=true; //\\\n\u{2028}\u{2029}"
         let safe = try clashScriptContents(template, proxyGroup: group)
-        let escaped = evaluate(safe, expression: "({rules: main({}).rules, injected: globalThis.injected === true})").toDictionary()!
+        let escaped = evaluate(safe, expression: "({rules: main({'proxy-groups':[{name:\(try jsonString(group))}]}).rules, injected: globalThis.injected === true})").toDictionary()!
         precondition(escaped["rules"] as? [String] == claudeProxyRuleDomains.map { "DOMAIN-SUFFIX,\($0),\(group)" })
         precondition(escaped["injected"] as? Bool == false)
+    }
+    static func jsonString(_ value: String) throws -> String {
+        let data = try JSONSerialization.data(withJSONObject: value, options: .fragmentsAllowed)
+        return String(decoding: data, as: UTF8.self)
+            .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
+            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
     }
     static func testSourcePreservation() throws {
         for original in [template, template + "\n", template + "\r", template + "\n\n", template.replacingOccurrences(of: "\n", with: "\r\n") + "\r\n",
@@ -57,7 +69,7 @@ import JavaScriptCore
             precondition(repeated == enabled)
             precondition(Data(removed.utf8) == Data(original.utf8))
             let changed = try clashScriptContents(enabled, proxyGroup: "NEXT")
-            precondition(!changed.contains("anthropic.com,PROXY") && changed.contains("anthropic.com,NEXT"))
+            precondition(changed != enabled && changed.contains("const preferredGroup = \"NEXT\";"))
         }
         let literalMarker = template + "\nconst note = '" + clashScriptBeginMarker + "';"
         let literalRemoved = try clashScriptContents(literalMarker, proxyGroup: nil)

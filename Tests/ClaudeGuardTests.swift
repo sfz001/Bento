@@ -144,6 +144,9 @@ struct ClaudeGuardTests {
             precondition(ClashConfiguration.parse(variant).proxyGroups == ["PROXY", "Backup"], "Group sequence indentation and field order must not change its names")
         }
         precondition(ClashProbe.rulesRouteToProxy(rules, groups: ["PROXY"]))
+        let adaptedRules = rules.replacingOccurrences(of: "\"proxy\":\"PROXY\"", with: "\"proxy\":\"一元机场\"")
+        precondition(ClashProbe.rulesRouteToProxy(adaptedRules, groups: ["一元机场", "自动选择", "故障转移"]))
+        precondition(!ClashProbe.rulesRouteToProxy(adaptedRules, groups: ["自动选择", "故障转移"]))
         var runtimeYAML = yaml
         var routeInterface = "utun1024"
         var ipv6Route: (status: Int32, output: String) = (0, "interface: utun1024\n")
@@ -169,6 +172,9 @@ struct ClaudeGuardTests {
            })
         do { try probe.check() } catch { preconditionFailure("Expected ready probe: \(error)") }
         precondition((try? probe.preferredProxyGroup()) == "PROXY")
+        runtimeYAML = yaml.replacingOccurrences(of: "  - name: PROXY", with: "  - name: 一元机场\n  - name: 自动选择\n  - name: 故障转移")
+        precondition((try? probe.preferredProxyGroup()) == "一元机场")
+        runtimeYAML = yaml
         for variant in groupVariants {
             runtimeYAML = variant
             do { try probe.check() } catch { preconditionFailure("Valid group YAML must pass the complete probe: \(error)") }

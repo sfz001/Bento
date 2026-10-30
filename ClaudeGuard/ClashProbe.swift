@@ -130,11 +130,9 @@ final class ClashProbe {
         guard let data = configs.data(using: .utf8), let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               object["mode"] as? String == "rule" else { throw ClashProbeError.ruleModeRequired }
         let rules = try request(configuration, core.commandSocket, "/rules")
-        guard Self.rulesRouteToProxy(rules, groups: configuration.proxyGroups) else { throw ClashProbeError.rulesNotProxy }
+        guard let group = Self.rulesProxyGroup(rules, groups: configuration.proxyGroups) else { throw ClashProbeError.rulesNotProxy }
         let proxies = try request(configuration, core.commandSocket, "/proxies")
-        guard let group = Self.proxyGroup(configuration.proxyGroups), Self.selectedProxyIsSafe(proxies, group: group) else {
-            throw ClashProbeError.proxySelectionUnsafe
-        }
+        guard Self.selectedProxyIsSafe(proxies, group: group) else { throw ClashProbeError.proxySelectionUnsafe }
     }
     func preferredProxyGroup() throws -> String {
         let core = try core(), groups = ClashConfiguration.parse(try readFile(core.configPath)).proxyGroups
@@ -142,20 +140,25 @@ final class ClashProbe {
         return group
     }
     static func rulesRouteToProxy(_ json: String, groups: [String]) -> Bool {
+        rulesProxyGroup(json, groups: groups) != nil
+    }
+    private static func rulesProxyGroup(_ json: String, groups: [String]) -> String? {
         guard let data = json.data(using: .utf8), let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let rules = object["rules"] as? [[String: Any]] else { return false }
+              let rules = object["rules"] as? [[String: Any]] else { return nil }
         let expected = Set(claudeProxyRuleDomains)
-        guard let proxy = proxyGroup(groups), rules.count >= expected.count else { return false }
+        guard rules.count >= expected.count else { return nil }
         // Managed prepend-rules must really take precedence over DIRECT/MATCH and scripts.
         let prefix = rules.prefix(expected.count)
-        return Set(prefix.compactMap { $0["payload"] as? String }) == expected && prefix.allSatisfy {
-            ($0["type"] as? String) == "DomainSuffix" && ($0["proxy"] as? String) == proxy
-        }
+        guard Set(prefix.compactMap { $0["payload"] as? String }) == expected,
+              prefix.allSatisfy({ ($0["type"] as? String) == "DomainSuffix" }),
+              let proxy = prefix.first?["proxy"] as? String,
+              prefix.allSatisfy({ ($0["proxy"] as? String) == proxy }),
+              groups.contains(proxy), proxy != "DIRECT", proxy != "REJECT" else { return nil }
+        return proxy
     }
     private static func proxyGroup(_ groups: [String]) -> String? {
         if groups.contains("PROXY") { return "PROXY" }
-        let candidates = groups.filter { $0 != "DIRECT" && $0 != "REJECT" && !$0.isEmpty }
-        return candidates.count == 1 ? candidates[0] : nil
+        return groups.first { $0 != "DIRECT" && $0 != "REJECT" && !$0.isEmpty }
     }
     static func selectedProxyIsSafe(_ json: String, group: String) -> Bool {
         guard let data = json.data(using: .utf8),

@@ -128,16 +128,19 @@ func clashScriptContents(_ contents: String, proxyGroup: String?) throws -> Stri
                                             includesLeadingNewline: true)
     guard let proxyGroup else { return original }
     guard hasWrappableMain(original) else { throw ClashMergeError.unsupportedScript }
-    let rules = claudeProxyRuleDomains.map { "DOMAIN-SUFFIX,\($0),\(proxyGroup)" }
-    let data = try JSONSerialization.data(withJSONObject: rules)
-    let json = String(decoding: data, as: UTF8.self)
-        .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
-        .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
+    func json(_ value: Any) throws -> String {
+        let data = try JSONSerialization.data(withJSONObject: value, options: .fragmentsAllowed)
+        return String(decoding: data, as: UTF8.self)
+            .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
+            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
+    }
+    let domains = try json(claudeProxyRuleDomains), preferredGroup = try json(proxyGroup)
     return original + "\n" + """
     \(clashScriptBeginMarker)
     ;(function () {
       const originalMain = main;
-      const guardedRules = \(json);
+      const guardedDomains = \(domains);
+      const preferredGroup = \(preferredGroup);
       main = function () {
         const config = originalMain.apply(this, arguments);
         if (!config || typeof config !== "object" || Array.isArray(config)) {
@@ -146,6 +149,20 @@ func clashScriptContents(_ contents: String, proxyGroup: String?) throws -> Stri
         if (config.rules !== undefined && !Array.isArray(config.rules)) {
           throw new Error("Bento Claude Guard: rules must be an array");
         }
+        const groups = Array.isArray(config["proxy-groups"]) ? config["proxy-groups"] : [];
+        const names = groups.map(function (group) {
+          return group && typeof group === "object" && typeof group.name === "string" ? group.name : "";
+        }).filter(function (name) {
+          return name !== "" && name !== "DIRECT" && name !== "REJECT";
+        });
+        let proxyGroup = "";
+        if (names.indexOf("PROXY") !== -1) { proxyGroup = "PROXY"; }
+        else if (names.indexOf(preferredGroup) !== -1) { proxyGroup = preferredGroup; }
+        else if (names.length > 0) { proxyGroup = names[0]; }
+        if (proxyGroup === "") { throw new Error("Bento Claude Guard: no usable proxy group"); }
+        const guardedRules = guardedDomains.map(function (domain) {
+          return "DOMAIN-SUFFIX," + domain + "," + proxyGroup;
+        });
         config.rules = guardedRules.concat((config.rules || []).filter(function (rule) {
           return guardedRules.indexOf(rule) === -1;
         }));
